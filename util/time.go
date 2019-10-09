@@ -235,3 +235,77 @@ func (f Time) String() string {
 		return f.Time().Format(fs)
 	}
 }
+
+func (t Time) IsZero() bool {
+	return t.Time().IsZero()
+}
+
+func (t Time) Before(a Time) bool {
+	return t.Time().Before(a.Time())
+}
+
+func (t Time) After(a Time) bool {
+	return t.Time().After(a.Time())
+}
+
+func (t Time) Unix() int64 {
+	return t.Time().Unix()
+}
+
+func (t Time) Truncate(d time.Duration) Time {
+	return Time{
+		tm:     t.Time().Truncate(d),
+		format: t.format,
+	}
+}
+
+func (t Time) Add(d time.Duration) Time {
+	return Time{
+		tm:     t.Time().Add(d),
+		format: t.format,
+	}
+}
+
+func (t Time) Equal(t2 Time) bool {
+	return t.Time().Equal(t2.Time())
+}
+
+func UnixNonZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+func UnixMilli(t time.Time) int64 {
+	return t.UnixNano() / 1000000
+}
+
+func UnixMilliNonZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano() / 1000000
+}
+
+func UnixMicro(t time.Time) int64 {
+	return t.UnixNano() / 1000
+}
+
+func UnixMicroNonZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano() / 1000
+}
+
+func UnixNano(t time.Time) int64 {
+	return t.UnixNano()
+}
+
+func UnixNanoNonZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
+}
