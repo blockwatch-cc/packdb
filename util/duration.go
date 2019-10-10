@@ -4,6 +4,7 @@
 package util
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -47,4 +48,31 @@ func ParseDuration(d string) (Duration, error) {
 		return Duration(i), nil
 	}
 	return 0, fmt.Errorf("duration: parsing '%s': invalid syntax", d)
+}
+
+func (d Duration) MarshalText() ([]byte, error) {
+	return []byte(time.Duration(d).String()), nil
+}
+
+func (d *Duration) UnmarshalText(data []byte) error {
+	i, err := ParseDuration(string(data))
+	if err != nil {
+		return err
+	}
+	*d = i
+	return nil
+}
+
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if data[0] == '"' {
+		return d.UnmarshalText(bytes.Trim(data, "\""))
+	}
+	if i, err := strconv.ParseInt(string(data), 10, 64); err == nil {
+		*d = Duration(time.Duration(i) * time.Second)
+		return nil
+	}
+	return fmt.Errorf("duration: parsing '%s': invalid syntax", string(data))
 }

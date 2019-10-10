@@ -4,7 +4,7 @@ go 1.13
 
 require (
 	github.com/cespare/xxhash v1.1.0
-	github.com/echa/log v0.0.0-20191009000215-3db413c6cf4b
+	github.com/echa/log v1.0.0
 	github.com/ericlagergren/decimal v0.0.0-20190912144844-2c3e3e1ef942
 	github.com/frankban/quicktest v1.5.0 // indirect
 	github.com/golang/snappy v0.0.1

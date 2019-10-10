@@ -6,6 +6,8 @@ github.com/cespare/xxhash v1.1.0/go.mod h1:XrSqR1VqqWfGrhpAt58auRo0WTKS1nRRg3ghf
 github.com/cockroachdb/apd v1.1.0/go.mod h1:8Sl8LxpKi29FqWXR16WEFZRNSz3SoPzUzeMeY4+DwBQ=
 github.com/echa/log v0.0.0-20191009000215-3db413c6cf4b h1:OBYPJgI10+GvGLdtvoOppwYhNNMoupt+s+RnM7VMbq8=
 github.com/echa/log v0.0.0-20191009000215-3db413c6cf4b/go.mod h1:V8lWE4YGcwDdg0IPBqDQ9eWp2MdsMHfvHpSjaIp4+VQ=
+github.com/echa/log v1.0.0 h1:n+UtYusbs13m8E9FG8RWGC74agi5/oYTO9naI6aNQkE=
+github.com/echa/log v1.0.0/go.mod h1:V8lWE4YGcwDdg0IPBqDQ9eWp2MdsMHfvHpSjaIp4+VQ=
 github.com/ericlagergren/decimal v0.0.0-20190912144844-2c3e3e1ef942 h1:Wm7GcUEhq0kioHEMLVVR9lyRezJsyzl9uLGnsQkijMU=
 github.com/ericlagergren/decimal v0.0.0-20190912144844-2c3e3e1ef942/go.mod h1:ZWP59etEywfyMG2lAqnoi3t8uoiZCiTmLtwt6iESIsQ=
 github.com/frankban/quicktest v1.5.0 h1:Tb4jWdSpdjKzTUicPnY61PZxKbDoGa7ABbrReT3gQVY=

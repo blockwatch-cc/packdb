@@ -4,6 +4,7 @@
 package util
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -234,6 +235,38 @@ func (f Time) String() string {
 		}
 		return f.Time().Format(fs)
 	}
+}
+
+func (f Time) MarshalText() ([]byte, error) {
+	if f.IsZero() {
+		return nil, nil
+	}
+	return []byte(f.String()), nil
+}
+
+func (f *Time) UnmarshalText(data []byte) error {
+	t, err := ParseTime(string(data))
+	if err != nil {
+		return err
+	}
+	*f = t
+	return nil
+}
+
+func (f *Time) UnmarshalJSON(data []byte) error {
+	return f.UnmarshalText(bytes.Trim(data, "\""))
+}
+
+func (f Time) MarshalJSON() ([]byte, error) {
+	if f.IsZero() {
+		return nil, nil
+	}
+	s := f.String()
+	if f.format.IsUnix() {
+		return []byte(s), nil
+	}
+
+	return []byte("\"" + s + "\""), nil
 }
 
 func (t Time) IsZero() bool {
