@@ -981,15 +981,28 @@ func TestBitSetReverse(T *testing.T) {
 	}
 }
 
+func reverseIndex(sz, i int) int {
+	return sz - i + int(7-uint(sz-1)&0x7) - 1
+}
+
+func setReverseBit(bits []byte, sz, i int) {
+	idx := reverseIndex(sz, i)
+	bits[idx>>3] |= byte(1 << uint(7-idx&0x7))
+}
+
+func clearReverseBit(bits []byte, sz, i int) {
+	idx := reverseIndex(sz, i)
+	bits[idx>>3] &^= byte(1 << uint(7-idx&0x7))
+}
+
 func TestBitSetSetReverse(T *testing.T) {
 	for _, sz := range bitSetSizes {
 		bits := NewBitSet(sz).Reverse()
 		cmp := fillBitset(nil, sz, 0)
-		pad := uint(7 - uint(sz-1)&0x7)
 
-		// set first bit (still the first bit when reversed, but with leading padding)
+		// set first bit
 		bits.Set(0)
-		cmp[0] |= 0x80 >> pad
+		setReverseBit(cmp, sz, 0)
 		if got, want := bits.Count(), int64(1); got != want {
 			T.Errorf("%d: unexpected count %d, expected %d", sz, got, want)
 		}
@@ -1000,9 +1013,9 @@ func TestBitSetSetReverse(T *testing.T) {
 			T.Errorf("%d: unexpected result %x, expected %x", sz, bits.Bytes(), cmp)
 		}
 
-		// set last bit (note, there's no padding on the right side)
+		// set last bit
 		bits.Set(sz - 1)
-		cmp[(sz-1)>>3] |= 0x01
+		setReverseBit(cmp, sz, sz-1)
 		if got, want := bits.Count(), int64(2); got != want {
 			T.Errorf("%d: unexpected count %d, expected %d", sz, got, want)
 		}
@@ -1045,11 +1058,10 @@ func TestBitSetClearReverse(T *testing.T) {
 		bits.Reverse()
 		cmp := fillBitset(nil, sz, 0xff)
 		bitsetReverse(cmp)
-		pad := uint(7 - uint(sz-1)&0x7)
 
 		// clear first bit
 		bits.Clear(0)
-		cmp[0] &^= 0x80 >> pad // 0x7f
+		clearReverseBit(cmp, sz, 0)
 		if got, want := bits.Count(), popcount(cmp); got != want {
 			T.Errorf("%d_first: unexpected count %d, expected %d", sz, got, want)
 		}
@@ -1062,7 +1074,7 @@ func TestBitSetClearReverse(T *testing.T) {
 
 		// clear last bit
 		bits.Clear(sz - 1)
-		cmp[(sz-1)>>3] &^= 1
+		clearReverseBit(cmp, sz, sz-1)
 		if got, want := bits.Count(), popcount(cmp); got != want {
 			T.Errorf("%d_last: unexpected count %d, expected %d", sz, got, want)
 		}

@@ -151,7 +151,8 @@ func (s *BitSet) Set(i int) *BitSet {
 		return s
 	}
 	if s.isReverse {
-		i += int(7 - uint(s.size-1)&0x7)
+		pad := int(7 - uint(s.size-1)&0x7)
+		i = s.size - i + pad - 1
 	}
 	mask := byte(1 << uint(7-i&0x7))
 	if s.cnt >= 0 && s.buf[i>>3]&mask == 0 {
@@ -166,7 +167,8 @@ func (s *BitSet) Clear(i int) *BitSet {
 		return s
 	}
 	if s.isReverse {
-		i += int(7 - uint(s.size-1)&0x7)
+		pad := int(7 - uint(s.size-1)&0x7)
+		i = s.size - i + pad - 1
 	}
 	mask := byte(1 << uint(7-i&0x7))
 	if s.cnt > 0 && s.buf[i>>3]&mask > 0 {
@@ -181,7 +183,8 @@ func (s *BitSet) IsSet(i int) bool {
 		return false
 	}
 	if s.isReverse {
-		i += int(7 - uint(s.size-1)&0x7)
+		pad := int(7 - uint(s.size-1)&0x7)
+		i = s.size - i + pad - 1
 	}
 	mask := byte(1 << uint(7-i&0x7))
 	return (s.buf[i>>3] & mask) > 0
