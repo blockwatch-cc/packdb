@@ -49,9 +49,10 @@ import (
 )
 
 const (
-	idFieldName         = "I"
-	defaultCacheSize    = 128 // keep 128 unpacked partitions in memory (per table/index)
-	defaultPackSizeLog2 = 16  // 64k entries per partition
+	idFieldName             = "I"
+	defaultCacheSize        = 128 // keep 128 unpacked partitions in memory (per table/index)
+	defaultPackSizeLog2     = 16  // 64k entries per partition
+	defaultJournalFillLevel = 50  // keep space for extension
 )
 
 var (
@@ -208,7 +209,7 @@ func (d *DB) CreateTable(name string, fields FieldList, opts Options) (*Table, e
 		if err := t.journal.InitFields(fields, 1<<uint(t.opts.JournalSizeLog2)); err != nil {
 			return err
 		}
-		_, err = storePackTx(dbTx, t.metakey, journalKey, t.journal, t.opts.FillLevel)
+		_, err = storePackTx(dbTx, t.metakey, journalKey, t.journal, defaultJournalFillLevel)
 		if err != nil {
 			return err
 		}
@@ -216,7 +217,7 @@ func (d *DB) CreateTable(name string, fields FieldList, opts Options) (*Table, e
 		if err := t.tombstone.Init(Tombstone{}, 1<<uint(t.opts.JournalSizeLog2)); err != nil {
 			return err
 		}
-		_, err = storePackTx(dbTx, t.metakey, tombstoneKey, t.tombstone, t.opts.FillLevel)
+		_, err = storePackTx(dbTx, t.metakey, tombstoneKey, t.tombstone, defaultJournalFillLevel)
 		if err != nil {
 			return err
 		}
@@ -1046,13 +1047,13 @@ func (t *Table) Close() error {
 	}
 
 	if t.journal.IsDirty() {
-		_, err = tx.storePack(t.metakey, journalKey, t.journal, t.opts.FillLevel)
+		_, err = tx.storePack(t.metakey, journalKey, t.journal, defaultJournalFillLevel)
 		if err != nil {
 			return err
 		}
 	}
 	if t.tombstone.IsDirty() {
-		_, err = tx.storePack(t.metakey, tombstoneKey, t.tombstone, t.opts.FillLevel)
+		_, err = tx.storePack(t.metakey, tombstoneKey, t.tombstone, defaultJournalFillLevel)
 		if err != nil {
 			return err
 		}
@@ -1094,20 +1095,22 @@ func (t *Table) FlushJournal(ctx context.Context) error {
 
 func (t *Table) flushJournalTx(ctx context.Context, tx *Tx) error {
 	if t.journal.IsDirty() {
-		n, err := tx.storePack(t.metakey, journalKey, t.journal, t.opts.FillLevel)
+		n, err := tx.storePack(t.metakey, journalKey, t.journal, defaultJournalFillLevel)
 		if err != nil {
 			return err
 		}
-		atomic.AddInt64(&t.stats.PacksStored, 1)
-		atomic.AddInt64(&t.stats.PackBytesWritten, int64(n))
+		atomic.AddInt64(&t.stats.JournalFlushedTuples, int64(t.journal.Len()))
+		atomic.AddInt64(&t.stats.JournalPacksStored, 1)
+		atomic.AddInt64(&t.stats.JournalBytesWritten, int64(n))
 	}
 	if t.tombstone.IsDirty() {
-		n, err := tx.storePack(t.metakey, tombstoneKey, t.tombstone, t.opts.FillLevel)
+		n, err := tx.storePack(t.metakey, tombstoneKey, t.tombstone, defaultJournalFillLevel)
 		if err != nil {
 			return err
 		}
-		atomic.AddInt64(&t.stats.PacksStored, 1)
-		atomic.AddInt64(&t.stats.PackBytesWritten, int64(n))
+		atomic.AddInt64(&t.stats.TombstoneFlushedTuples, int64(t.tombstone.Len()))
+		atomic.AddInt64(&t.stats.TombstonePacksStored, 1)
+		atomic.AddInt64(&t.stats.TombstoneBytesWritten, int64(n))
 	}
 	return nil
 }
@@ -1806,6 +1809,7 @@ func (t *Table) QueryTxDesc(ctx context.Context, tx *Tx, q Query) (*Result, erro
 				return nil, err
 			}
 			q.rowsMatched++
+			jbits.Clear(i)
 
 			if q.Limit > 0 && q.rowsMatched == q.Limit {
 				break

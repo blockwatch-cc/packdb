@@ -25,6 +25,14 @@ type TableStats struct {
 	QueryCalls  int64 `json:"calls_query"`
 	StreamCalls int64 `json:"calls_stream"`
 
+	// journal statistics
+	JournalPacksStored     int64 `json:"journal_packs_stored"`
+	JournalFlushedTuples   int64 `json:"journal_tuples_flushed"`
+	JournalBytesWritten    int64 `json:"journal_bytes_written"`
+	TombstonePacksStored   int64 `json:"tomb_packs_stored"`
+	TombstoneFlushedTuples int64 `json:"tomb_tuples_flushed"`
+	TombstoneBytesWritten  int64 `json:"tomb_bytes_written"`
+
 	// pack statistics
 	PacksCount       int64 `json:"packs_count"`
 	PacksCached      int64 `json:"packs_cached"`
