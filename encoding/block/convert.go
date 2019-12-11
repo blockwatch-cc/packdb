@@ -128,5 +128,5 @@ func ConvertAmount(f float64, dec int) uint64 {
 }
 
 func ConvertValue(amount uint64, dec int) float64 {
-	return float64(amount) / math.Pow10(dec)
+	return float64(int64(amount)) / math.Pow10(dec)
 }
