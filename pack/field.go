@@ -453,6 +453,56 @@ func (t FieldType) ParseSliceAs(s string) (interface{}, error) {
 	}
 }
 
+func (t FieldType) ToString(val interface{}) string {
+	ss := make([]string, 0)
+	switch t {
+	case FieldTypeBytes:
+		if v, ok := val.([][]byte); ok {
+			for _, vv := range v {
+				ss = append(ss, util.ToString(vv))
+			}
+		}
+	case FieldTypeString:
+		if v, ok := val.([]string); ok {
+			ss = v
+		}
+	case FieldTypeDatetime:
+		if v, ok := val.([]time.Time); ok {
+			for _, vv := range v {
+				ss = append(ss, util.ToString(vv))
+			}
+		}
+	case FieldTypeBoolean:
+		if v, ok := val.([]bool); ok {
+			for _, vv := range v {
+				ss = append(ss, util.ToString(vv))
+			}
+		}
+	case FieldTypeInt64:
+		if v, ok := val.([]int64); ok {
+			for _, vv := range v {
+				ss = append(ss, util.ToString(vv))
+			}
+		}
+	case FieldTypeUint64:
+		if v, ok := val.([]uint64); ok {
+			for _, vv := range v {
+				ss = append(ss, util.ToString(vv))
+			}
+		}
+	case FieldTypeFloat64:
+		if v, ok := val.([]float64); ok {
+			for _, vv := range v {
+				ss = append(ss, util.ToString(vv))
+			}
+		}
+	}
+	if len(ss) > 0 {
+		return strings.Join(ss, ", ")
+	}
+	return util.ToString(val)
+}
+
 func (t FieldType) CheckType(val interface{}) error {
 	var ok bool
 	switch t {

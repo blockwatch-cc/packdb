@@ -215,13 +215,13 @@ func (c *Condition) Compile() {
 			c.hashmap[sum] = i
 		} else {
 			if mapval != 0xFFFFFFFF {
-				log.Warnf("pack: hash collision %0x / %0x == %0x", v, vals[mapval], sum)
+				log.Warnf("pack: condition hash collision %0x / %0x == %0x", v, vals[mapval], sum)
 				c.hashoverflow = append(c.hashoverflow, hashvalue{
 					hash: sum,
 					pos:  mapval,
 				})
 			} else {
-				log.Warnf("pack: double hash collision %0x == %0x", v, sum)
+				log.Warnf("pack: condition double hash collision %0x == %0x", v, sum)
 			}
 			c.hashoverflow = append(c.hashoverflow, hashvalue{
 				hash: sum,
@@ -270,10 +270,10 @@ func (c Condition) String() string {
 		if size == 0 {
 			size = reflect.ValueOf(c.Value).Len()
 		}
-		if size > 5 {
+		if size > 16 {
 			return fmt.Sprintf("%s %s [%d values]", c.Field.Name, c.Mode.Op(), size)
 		} else {
-			return fmt.Sprintf("%s %s [%v]", c.Field.Name, c.Mode.Op(), c.Value)
+			return fmt.Sprintf("%s %s [%v]", c.Field.Name, c.Mode.Op(), c.Field.Type.ToString(c.Value))
 		}
 	default:
 		return fmt.Sprintf("%s %s %s [%s]", c.Field.Name, c.Mode.Op(), util.ToString(c.Value), c.Raw)
