@@ -1090,6 +1090,19 @@ func (t *Table) FlushJournal(ctx context.Context) error {
 		return err
 	}
 
+	// store table metadata
+	if t.meta.dirty {
+		buf, err := json.Marshal(t.meta)
+		if err != nil {
+			return err
+		}
+		err = tx.tx.Bucket(t.metakey).Put(metaKey, buf)
+		if err != nil {
+			return err
+		}
+		t.meta.dirty = false
+	}
+
 	return tx.Commit()
 }
 
