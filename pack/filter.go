@@ -57,6 +57,15 @@ func (m FilterMode) IsValid() bool {
 	return m != FilterModeInvalid
 }
 
+func (m FilterMode) IsScalar() bool {
+	switch m {
+	case FilterModeInvalid, FilterModeRange, FilterModeIn, FilterModeNotIn:
+		return false
+	default:
+		return true
+	}
+}
+
 func (m FilterMode) String() string {
 	switch m {
 	case FilterModeEqual:
