@@ -1,3 +1,3 @@
 There be dragons.
 
-© 2018-2019 KIDTSUNAMI UG, All rights reserved.
+© 2018-2020 Blockwatch Data Inc, All rights reserved.

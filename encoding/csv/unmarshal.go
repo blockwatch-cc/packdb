@@ -1,5 +1,5 @@
-// Copyright (c) 2017-2019 KIDTSUNAMI
-// Author: alex@kidtsunami.com
+// Copyright (c) 2017-2020 Blockwatch Data Inc.
+// Author: alex@blockwatch.cc
 
 // Package csv decodes and encodes comma-separated values (CSV) files to and from
 // arbitrary Go types. Because there are many different kinds of CSV files, this
