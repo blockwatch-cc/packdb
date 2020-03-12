@@ -95,6 +95,15 @@ func NonZero(x ...int) int {
 	return 0
 }
 
+func NonZero64(x ...int64) int64 {
+	for _, v := range x {
+		if v != 0 {
+			return v
+		}
+	}
+	return 0
+}
+
 func NonZeroMin(x ...int) int {
 	var min int
 	for _, v := range x {
