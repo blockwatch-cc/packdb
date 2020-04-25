@@ -29,6 +29,7 @@ type AlignedTicker struct {
 	C <-chan time.Time
 	c chan time.Time
 	sync.Once
+	sync.Mutex
 }
 
 func NewAlignedTicker(d time.Duration) *AlignedTicker {
@@ -97,6 +98,8 @@ func (w *WallTicker) Stop() {
 	// run only once
 	w.Do(func() {
 		close(w.stop)
+		w.Lock()
+		defer w.Unlock()
 		if w.tm != nil {
 			w.tm.Stop()
 			w.tm = nil
@@ -106,6 +109,8 @@ func (w *WallTicker) Stop() {
 
 // const fakeAzure = false
 func (w *WallTicker) start() {
+	w.Lock()
+	defer w.Unlock()
 	now := time.Now()
 	d := time.Until(now.Add(-w.offset).Add(w.align * 4 / 3).Truncate(w.align).Add(w.offset))
 	d = time.Duration(float64(d) / w.skew)
