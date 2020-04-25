@@ -25,11 +25,11 @@ import (
 // }
 
 type AlignedTicker struct {
+	sync.Mutex
+	sync.Once
 	t *time.Ticker
 	C <-chan time.Time
 	c chan time.Time
-	sync.Once
-	sync.Mutex
 }
 
 func NewAlignedTicker(d time.Duration) *AlignedTicker {
@@ -49,6 +49,8 @@ func NewAlignedTicker(d time.Duration) *AlignedTicker {
 			default:
 				return
 			}
+			t.Lock()
+			defer t.Unlock()
 			t.t = time.NewTicker(d)
 			t.C = t.t.C
 		}
@@ -59,6 +61,8 @@ func NewAlignedTicker(d time.Duration) *AlignedTicker {
 func (t *AlignedTicker) Stop() {
 	// run only once
 	t.Do(func() {
+		t.Lock()
+		defer t.Unlock()
 		if t.t != nil {
 			t.t.Stop()
 		}
@@ -69,6 +73,8 @@ func (t *AlignedTicker) Stop() {
 // More accurate Ticker from
 // https://github.com/golang/go/issues/19810
 type WallTicker struct {
+	sync.Mutex
+	sync.Once
 	C      <-chan time.Time
 	align  time.Duration
 	offset time.Duration
@@ -78,7 +84,6 @@ type WallTicker struct {
 	d      time.Duration
 	last   time.Time
 	tm     *time.Timer
-	sync.Once
 }
 
 func NewWallTicker(align, offset time.Duration) *WallTicker {
