@@ -972,14 +972,12 @@ func (p *Package) CopyFrom(src *Package, dstPos, srcPos, srcLen int) error {
 			copy(p.blocks[i].Strings[dstPos:], src.blocks[i].Strings[srcPos:srcPos+n])
 		case BlockBytes:
 			for j, v := range src.blocks[i].Bytes[srcPos : srcPos+n] {
-				if cap(p.blocks[i].Bytes[dstPos+j]) < len(v) {
+				if len(p.blocks[i].Bytes[dstPos+j]) < len(v) {
 					buf := make([]byte, len(v))
 					copy(buf, v)
 					p.blocks[i].Bytes[dstPos+j] = buf
 				} else {
-					if len(p.blocks[i].Bytes[dstPos+j]) != len(v) {
-						p.blocks[i].Bytes[dstPos+j] = p.blocks[i].Bytes[dstPos+j][:len(v)]
-					}
+					p.blocks[i].Bytes[dstPos+j] = p.blocks[i].Bytes[dstPos+j][:len(v)]
 					copy(p.blocks[i].Bytes[dstPos+j], v)
 				}
 			}
