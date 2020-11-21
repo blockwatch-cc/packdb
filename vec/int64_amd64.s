@@ -147,7 +147,8 @@ loop_avx2:
 	VPACKSSWB	Y1, Y3, Y1
 	VPSHUFB		Y10, Y1, Y1
 	VPMOVMSKB	Y1, AX
-	XORQ	    $0xffffffff, AX
+
+	NOTL        AX
 	MOVL		AX, (DI)
 	POPCNTQ		AX, AX
 	ADDQ		AX, R9
@@ -174,7 +175,7 @@ prep_scalar:
 scalar:
 	MOVQ	(SI), R8
 	CMPQ	R8, DX
-	SETEQ	R10
+	SETNE	R10
 	ADDL	R10, R9
 	ORL	 	R10, AX
 	SHLL	$1, AX
@@ -186,7 +187,6 @@ scalar:
 scalar_done:
 	SHLL	CX, AX
 	BSWAPL	AX
-	XORQ	$0xffffffff, AX
 	CMPQ	R11, $24
 	JBE		write_3
 	MOVL	AX, (DI)

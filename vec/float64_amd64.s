@@ -128,28 +128,27 @@ prep_avx2:
 	VMOVDQA		shuffle<>+0x00(SB), Y10
 
 loop_avx2:
-	VCMPPD		$0, 0(SI), Y0, Y1
-	VCMPPD		$0, 32(SI), Y0, Y2
-	VCMPPD		$0, 64(SI), Y0, Y3
-	VCMPPD		$0, 96(SI), Y0, Y4
-	VCMPPD		$0, 128(SI), Y0, Y5
+	VCMPPD		$0x04, 0(SI), Y0, Y1
+	VCMPPD		$0x04, 32(SI), Y0, Y2
+	VCMPPD		$0x04, 64(SI), Y0, Y3
+	VCMPPD		$0x04, 96(SI), Y0, Y4
+	VCMPPD		$0x04, 128(SI), Y0, Y5
 	VPACKSSDW	Y1, Y5, Y1
 	VPERMD		Y1, Y9, Y1
-	VCMPPD		$0, 160(SI), Y0, Y6
+	VCMPPD		$0x04, 160(SI), Y0, Y6
 	VPACKSSDW	Y2, Y6, Y2
 	VPERMD		Y2, Y9, Y2
 	VPACKSSDW	Y2, Y1, Y1
-	VCMPPD		$0, 192(SI), Y0, Y7
+	VCMPPD		$0x04, 192(SI), Y0, Y7
 	VPACKSSDW	Y3, Y7, Y3
 	VPERMD		Y3, Y9, Y3
-	VCMPPD		$0, 224(SI), Y0, Y8
+	VCMPPD		$0x04, 224(SI), Y0, Y8
 	VPACKSSDW	Y4, Y8, Y4
 	VPERMD		Y4, Y9, Y4
 	VPACKSSDW	Y4, Y3, Y3
 	VPACKSSWB	Y1, Y3, Y1
 	VPSHUFB		Y10, Y1, Y1
 	VPMOVMSKB	Y1, AX
-	XORQ	    $0xffffffff, AX
 	MOVL		AX, (DI)
 	POPCNTQ		AX, AX
 	ADDQ		AX, R9
@@ -174,12 +173,14 @@ prep_scalar:
 	SUBQ	BX, CX
 
 scalar:
-	VCOMISD	(SI), X0
-	JPS	    scalar_shift
-	SETEQ	R10
+	VUCOMISD	(SI), X0
+	SETNE	R10
+	JNP	    scalar_shift
+    MOVQ    $1, R10
+
+scalar_shift:
 	ADDL	R10, R9
 	ORL	 	R10, AX
-scalar_shift:
 	SHLL	$1, AX
 	LEAQ	8(SI), SI
 	DECL	BX
@@ -189,7 +190,6 @@ scalar_shift:
 scalar_done:
 	SHLL	CX, AX
 	BSWAPL	AX
-	XORQ	$0xffffffff, AX
 	CMPQ	R11, $24
 	JBE		write_3
 	MOVL	AX, (DI)

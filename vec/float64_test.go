@@ -48,6 +48,10 @@ var (
 	float64EqualTestMatch_1  float64 = 5
 	float64EqualTestCount_1  int64   = 10
 
+	float64NotEqualTestResult_1         = []byte{0x7d, 0xbd, 0xdc, 0x8f}
+	float64NotEqualTestMatch_1  float64 = 5
+	float64NotEqualTestCount_1  int64   = 22
+
 	float64LessTestResult_1         = []byte{0x70, 0x00, 0x00, 0x00}
 	float64LessTestMatch_1  float64 = 5
 	float64LessTestCount_1  int64   = 3
@@ -83,6 +87,10 @@ var (
 	float64EqualTestResult_2         = []byte{0x80, 0x0, 0x0, 0x0}
 	float64EqualTestMatch_2  float64 = -5.12
 	float64EqualTestCount_2  int64   = 1
+
+	float64NotEqualTestResult_2         = []byte{0xbf, 0xff, 0xff, 0xff}
+	float64NotEqualTestMatch_2  float64 = 2.5
+	float64NotEqualTestCount_2  int64   = 31
 
 	float64LessTestResult_2         = []byte{0x01, 0x04, 0x04, 0x21}
 	float64LessTestMatch_2  float64 = -5.12
@@ -128,6 +136,10 @@ var (
 	float64EqualTestMatch_3  float64 = math.MaxFloat64
 	float64EqualTestCount_3  int64   = 8
 
+	float64NotEqualTestResult_3         = []byte{0xdd, 0xdd, 0xdd, 0xdd}
+	float64NotEqualTestMatch_3  float64 = math.MaxFloat64
+	float64NotEqualTestCount_3  int64   = 24
+
 	float64LessTestResult_3         = []byte{0xdd, 0xdd, 0xdd, 0xdd}
 	float64LessTestMatch_3  float64 = math.MaxFloat64
 	float64LessTestCount_3  int64   = 24
@@ -171,6 +183,10 @@ var (
 	float64EqualTestResult_4         = []byte{0x0, 0x0, 0x0, 0x0}
 	float64EqualTestMatch_4  float64 = math.NaN()
 	float64EqualTestCount_4  int64   = 0
+
+	float64NotEqualTestResult_4         = []byte{0xff, 0xff, 0xff, 0xff}
+	float64NotEqualTestMatch_4  float64 = math.NaN()
+	float64NotEqualTestCount_4  int64   = 32
 
 	float64LessTestResult_4         = []byte{0x0, 0x0, 0x0, 0x0}
 	float64LessTestMatch_4  float64 = math.NaN()
@@ -407,6 +423,224 @@ func BenchmarkMatchFloat64EqualAVX2Scalar(B *testing.B) {
 			B.SetBytes(int64(n * 8))
 			for i := 0; i < B.N; i++ {
 				matchFloat64EqualAVX2(a, 5, bits)
+			}
+		})
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Not Equal Testcases
+//
+var float64NotEqualCases = []Float64Test{
+	Float64Test{
+		name: "vec1",
+		slice: []float64{
+			0, 5, 3, 5, // Y1
+			7, 5, 5, 9, // Y2
+			3, 5, 5, 5, // Y3
+			5, 0, 113, 12, // Y4
+
+			4, 2, 3, 5, // Y5
+			7, 3, 5, 9, // Y6
+			3, 13, 5, 5, // Y7
+			42, 5, 113, 12, // Y8
+		},
+		match:  5,
+		result: []byte{0xa9, 0x87, 0xed, 0xcb},
+		count:  19,
+	}, {
+		name:   "l32",
+		slice:  float64TestSlice_1,
+		match:  float64NotEqualTestMatch_1,
+		result: float64NotEqualTestResult_1,
+		count:  float64NotEqualTestCount_1,
+	}, {
+		name:   "l64",
+		slice:  append(float64TestSlice_1, float64TestSlice_1...),
+		match:  float64NotEqualTestMatch_1,
+		result: append(float64NotEqualTestResult_1, float64NotEqualTestResult_1...),
+		count:  float64NotEqualTestCount_1 * 2,
+	}, {
+		name:   "l31",
+		slice:  float64TestSlice_1[:31],
+		match:  float64NotEqualTestMatch_1,
+		result: []byte{0x7d, 0xbd, 0xdc, 0x8e},
+		count:  float64NotEqualTestCount_1 - 1,
+	}, {
+		name:   "l23",
+		slice:  float64TestSlice_1[:23],
+		match:  float64NotEqualTestMatch_1,
+		result: []byte{0x7d, 0xbd, 0xdc}, // last match is gone
+		count:  float64NotEqualTestCount_1 - 5,
+	}, {
+		name:   "l15",
+		slice:  float64TestSlice_1[:15],
+		match:  float64NotEqualTestMatch_1,
+		result: []byte{0x7d, 0xbc},
+		count:  float64NotEqualTestCount_1 - 11,
+	}, {
+		name:   "l7",
+		slice:  float64TestSlice_1[:7],
+		match:  float64NotEqualTestMatch_1,
+		result: []byte{0x7c},
+		count:  float64NotEqualTestCount_1 - 17,
+	}, {
+		name:   "l0",
+		slice:  make([]float64, 0),
+		match:  float64NotEqualTestMatch_1,
+		result: []byte{},
+		count:  0,
+	}, {
+		name:   "nil",
+		slice:  nil,
+		match:  float64NotEqualTestMatch_1,
+		result: []byte{},
+		count:  0,
+	}, {
+		// with negative values
+		name:   "neg32",
+		slice:  float64TestSlice_2,
+		match:  float64NotEqualTestMatch_2,
+		result: float64NotEqualTestResult_2,
+		count:  float64NotEqualTestCount_2,
+	}, {
+		// with negative values, test scalar algorithm
+		name:   "neg31",
+		slice:  float64TestSlice_2[:31],
+		match:  float64NotEqualTestMatch_2,
+		result: []byte{0xbf, 0xff, 0xff, 0xfe},
+		count:  float64NotEqualTestCount_2 - 1,
+	}, {
+		// with extreme values
+		name:   "ext32",
+		slice:  float64TestSlice_3,
+		match:  float64NotEqualTestMatch_3,
+		result: float64NotEqualTestResult_3,
+		count:  float64NotEqualTestCount_3,
+	}, {
+		// with extreme values, test scalar algorithm
+		name:   "ext31",
+		slice:  float64TestSlice_3[:31],
+		match:  float64NotEqualTestMatch_3,
+		result: []byte{0xdd, 0xdd, 0xdd, 0xdc},
+		count:  float64NotEqualTestCount_3 - 1,
+	}, {
+		// NaN, Inf
+		name:   "nan32",
+		slice:  float64TestSlice_4,
+		match:  float64NotEqualTestMatch_4,
+		result: float64NotEqualTestResult_4,
+		count:  float64NotEqualTestCount_4,
+	}, {
+		name:   "nan31",
+		slice:  float64TestSlice_4[:31],
+		match:  float64NotEqualTestMatch_4,
+		result: []byte{0xff, 0xff, 0xff, 0xfe},
+		count:  float64NotEqualTestCount_4 - 1,
+	},
+}
+
+func TestMatchFloat64NotEqualGeneric(T *testing.T) {
+	for _, c := range float64NotEqualCases {
+		// pre-allocate the result slice and fill with poison
+		bits := make([]byte, bitFieldLen(len(c.slice)))
+		cnt := matchFloat64NotEqualGeneric(c.slice, c.match, bits)
+		if got, want := len(bits), len(c.result); got != want {
+			T.Errorf("%s: unexpected result length %d, expected %d", c.name, got, want)
+		}
+		if got, want := cnt, c.count; got != want {
+			T.Errorf("%s: unexpected result bit count %d, expected %d", c.name, got, want)
+		}
+		if bytes.Compare(bits, c.result) != 0 {
+			T.Errorf("%s: unexpected result %x, expected %x", c.name, bits, c.result)
+		}
+	}
+}
+
+func TestMatchFloat64NotEqualAVX2(T *testing.T) {
+	for _, c := range float64NotEqualCases {
+		// pre-allocate the result slice and fill with poison
+		l := bitFieldLen(len(c.slice))
+		bits := make([]byte, l+32)
+		for i, _ := range bits {
+			bits[i] = 0xfa
+		}
+		bits = bits[:l]
+		cnt := matchFloat64NotEqualAVX2(c.slice, c.match, bits)
+		if got, want := len(bits), len(c.result); got != want {
+			T.Errorf("%s: unexpected result length %d, expected %d", c.name, got, want)
+		}
+		if got, want := cnt, c.count; got != want {
+			T.Errorf("%s: unexpected result bit count %d, expected %d", c.name, got, want)
+		}
+		if bytes.Compare(bits, c.result) != 0 {
+			T.Errorf("%s: unexpected result %x, expected %x", c.name, bits, c.result)
+		}
+		if bytes.Compare(bits[l:l+32], bytes.Repeat([]byte{0xfa}, 32)) != 0 {
+			T.Errorf("%s: result boundary violation %x", c.name, bits[l:l+32])
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Equal benchmarks
+//
+// BenchmarkMatchFloat64EqualGeneric/32-8  	30000000      45.2 ns/op	5669.15 MB/s
+// BenchmarkMatchFloat64EqualGeneric/128-8 	10000000     163 ns/op	6244.31 MB/s
+// BenchmarkMatchFloat64EqualGeneric/1024-8	 1000000    1265 ns/op	6475.16 MB/s
+// BenchmarkMatchFloat64EqualGeneric/4096-8	  300000    4858 ns/op	6744.84 MB/s
+// BenchmarkMatchFloat64EqualGeneric/65536-8   20000   78689 ns/op	6662.73 MB/s
+// BenchmarkMatchFloat64EqualGeneric/131072-8  10000  165887 ns/op	6321.02 MB/s
+func BenchmarkMatchFloat64NotEqualGeneric(B *testing.B) {
+	for _, n := range []int{32, 128, 1024, 4096, 64 * 1024, 128 * 1024} {
+		B.Run(fmt.Sprintf("%d", n), func(B *testing.B) {
+			a := randFloat64Slice(n, 1)
+			bits := make([]byte, bitFieldLen(len(a)))
+			B.ResetTimer()
+			B.SetBytes(int64(n * 8))
+			for i := 0; i < B.N; i++ {
+				matchFloat64NotEqualGeneric(a, 5, bits)
+			}
+		})
+	}
+}
+
+// BenchmarkMatchFloat64EqualAVX2/32-8     100000000     13.2 ns/op	19357.71 MB/s
+// BenchmarkMatchFloat64EqualAVX2/128-8   	50000000     40.7 ns/op	25157.90 MB/s
+// BenchmarkMatchFloat64EqualAVX2/1024-8  	 5000000    310 ns/op	26346.46 MB/s
+// BenchmarkMatchFloat64EqualAVX2/4096-8  	 1000000   1391 ns/op	23552.31 MB/s
+// BenchmarkMatchFloat64EqualAVX2/65536-8 	   50000  31474 ns/op	16657.80 MB/s
+// BenchmarkMatchFloat64EqualAVX2/131072-8     20000  61115 ns/op	17157.18 MB/s
+func BenchmarkMatchFloat64NotEqualAVX2(B *testing.B) {
+	for _, n := range []int{32, 128, 1024, 4096, 64 * 1024, 128 * 1024} {
+		B.Run(fmt.Sprintf("%d", n), func(B *testing.B) {
+			a := randFloat64Slice(n, 1)
+			bits := make([]byte, bitFieldLen(len(a)))
+			B.ResetTimer()
+			B.SetBytes(int64(n * 8))
+			for i := 0; i < B.N; i++ {
+				matchFloat64NotEqualAVX2(a, 5, bits)
+			}
+		})
+	}
+}
+
+// force scalar codepath by making last block <32 entries
+// BenchmarkMatchFloat64EqualAVX2Scalar/31-8    	50000000     38.9 ns/op	6371.31 MB/s
+// BenchmarkMatchFloat64EqualAVX2Scalar/127-8   	20000000     66.0 ns/op	15393.19 MB/s
+// BenchmarkMatchFloat64EqualAVX2Scalar/1023-8  	 5000000    319 ns/op	25624.28 MB/s
+// BenchmarkMatchFloat64EqualAVX2Scalar/4095-8  	 1000000   1377 ns/op	23778.72 MB/s
+// BenchmarkMatchFloat64EqualAVX2Scalar/65535-8 	   50000  29679 ns/op	17664.76 MB/s
+// BenchmarkMatchFloat64EqualAVX2Scalar/131071-8       20000  59205 ns/op	17710.78 MB/s
+func BenchmarkMatchFloat64NotEqualAVX2Scalar(B *testing.B) {
+	for _, n := range []int{32 - 1, 128 - 1, 1024 - 1, 4096 - 1, 64*1024 - 1, 128*1024 - 1} {
+		B.Run(fmt.Sprintf("%d", n), func(B *testing.B) {
+			a := randFloat64Slice(n, 1)
+			bits := make([]byte, bitFieldLen(len(a)))
+			B.ResetTimer()
+			B.SetBytes(int64(n * 8))
+			for i := 0; i < B.N; i++ {
+				matchFloat64NotEqualAVX2(a, 5, bits)
 			}
 		})
 	}

@@ -48,6 +48,10 @@ var (
 	int64EqualTestMatch_1  int64 = 5
 	int64EqualTestCount_1  int64 = 10
 
+	int64NotEqualTestResult_1       = []byte{0x7d, 0xbd, 0xdc, 0x8f}
+	int64NotEqualTestMatch_1  int64 = 5
+	int64NotEqualTestCount_1  int64 = 22
+
 	int64LessTestResult_1       = []byte{0x70, 0x00, 0x00, 0x00}
 	int64LessTestMatch_1  int64 = 5
 	int64LessTestCount_1  int64 = 3
@@ -83,6 +87,10 @@ var (
 	int64EqualTestResult_2       = []byte{0x80, 0x0, 0x0, 0x0}
 	int64EqualTestMatch_2  int64 = -5
 	int64EqualTestCount_2  int64 = 1
+
+	int64NotEqualTestResult_2       = []byte{0xbf, 0xff, 0xff, 0xff}
+	int64NotEqualTestMatch_2  int64 = 2
+	int64NotEqualTestCount_2  int64 = 31
 
 	int64LessTestResult_2       = []byte{0xe1, 0x04, 0x04, 0x21}
 	int64LessTestMatch_2  int64 = 5
@@ -127,6 +135,10 @@ var (
 	int64EqualTestResult_3       = []byte{0x01, 0x01, 0x01, 0x01}
 	int64EqualTestMatch_3  int64 = math.MinInt64
 	int64EqualTestCount_3  int64 = 4
+
+	int64NotEqualTestResult_3       = []byte{0xfe, 0xfe, 0xfe, 0xfe}
+	int64NotEqualTestMatch_3  int64 = math.MinInt64
+	int64NotEqualTestCount_3  int64 = 28
 
 	int64LessTestResult_3       = []byte{0x0, 0x0, 0x0, 0x00}
 	int64LessTestMatch_3  int64 = math.MinInt64
@@ -348,6 +360,193 @@ func BenchmarkMatchInt64EqualAVX2Scalar(B *testing.B) {
 			B.SetBytes(int64(n * 8))
 			for i := 0; i < B.N; i++ {
 				matchInt64EqualAVX2(a, 5, bits)
+			}
+		})
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Not Equal Testcases
+//
+var int64NotEqualCases = []Int64MatchTest{
+	Int64MatchTest{
+		name: "vec1",
+		slice: []int64{
+			0, 5, 3, 5, // Y1
+			7, 5, 5, 9, // Y2
+			3, 5, 5, 5, // Y3
+			5, 0, 113, 12, // Y4
+
+			4, 2, 3, 5, // Y5
+			7, 3, 5, 9, // Y6
+			3, 13, 5, 5, // Y7
+			42, 5, 113, 12, // Y8
+		},
+		match:  5,
+		result: []byte{0xa9, 0x87, 0xed, 0xcb},
+		count:  19,
+	}, {
+		name:   "l32",
+		slice:  int64TestSlice_1,
+		match:  int64NotEqualTestMatch_1,
+		result: int64NotEqualTestResult_1,
+		count:  int64NotEqualTestCount_1,
+	}, {
+		name:   "l64",
+		slice:  append(int64TestSlice_1, int64TestSlice_1...),
+		match:  int64NotEqualTestMatch_1,
+		result: append(int64NotEqualTestResult_1, int64NotEqualTestResult_1...),
+		count:  int64NotEqualTestCount_1 * 2,
+	}, {
+		name:   "l31",
+		slice:  int64TestSlice_1[:31],
+		match:  int64NotEqualTestMatch_1,
+		result: []byte{0x7d, 0xbd, 0xdc, 0x8e},
+		count:  int64NotEqualTestCount_1 - 1,
+	}, {
+		name:   "l23",
+		slice:  int64TestSlice_1[:23],
+		match:  int64NotEqualTestMatch_1,
+		result: []byte{0x7d, 0xbd, 0xdc}, // last match is gone
+		count:  int64NotEqualTestCount_1 - 5,
+	}, {
+		name:   "l15",
+		slice:  int64TestSlice_1[:15],
+		match:  int64NotEqualTestMatch_1,
+		result: []byte{0x7d, 0xbc},
+		count:  int64NotEqualTestCount_1 - 11,
+	}, {
+		name:   "l7",
+		slice:  int64TestSlice_1[:7],
+		match:  int64NotEqualTestMatch_1,
+		result: []byte{0x7c},
+		count:  int64NotEqualTestCount_1 - 17,
+	}, {
+		name:   "l0",
+		slice:  make([]int64, 0),
+		match:  int64NotEqualTestMatch_1,
+		result: []byte{},
+		count:  0,
+	}, {
+		name:   "nil",
+		slice:  nil,
+		match:  int64NotEqualTestMatch_1,
+		result: []byte{},
+		count:  0,
+	}, {
+		// with negative values
+		name:   "neg32",
+		slice:  int64TestSlice_2,
+		match:  int64NotEqualTestMatch_2,
+		result: int64NotEqualTestResult_2,
+		count:  int64NotEqualTestCount_2,
+	}, {
+		// with negative values, test scalar algorithm
+		name:   "neg31",
+		slice:  int64TestSlice_2[:31],
+		match:  int64NotEqualTestMatch_2,
+		result: []byte{0xbf, 0xff, 0xff, 0xfe},
+		count:  int64NotEqualTestCount_2 - 1,
+	}, {
+		// with extreme values
+		name:   "ext32",
+		slice:  int64TestSlice_3,
+		match:  int64NotEqualTestMatch_3,
+		result: int64NotEqualTestResult_3,
+		count:  int64NotEqualTestCount_3,
+	}, {
+		// with extreme values, test scalar algorithm
+		name:   "ext31",
+		slice:  int64TestSlice_3[:31],
+		match:  int64NotEqualTestMatch_3,
+		result: []byte{0xfe, 0xfe, 0xfe, 0xfe},
+		count:  int64NotEqualTestCount_3,
+	},
+}
+
+func TestMatchInt64NotEqualGeneric(T *testing.T) {
+	for _, c := range int64NotEqualCases {
+		// pre-allocate the result slice and fill with poison
+		bits := make([]byte, bitFieldLen(len(c.slice)))
+		cnt := matchInt64NotEqualGeneric(c.slice, c.match, bits)
+		if got, want := len(bits), len(c.result); got != want {
+			T.Errorf("%s: unexpected result length %d, expected %d", c.name, got, want)
+		}
+		if got, want := cnt, c.count; got != want {
+			T.Errorf("%s: unexpected result bit count %d, expected %d", c.name, got, want)
+		}
+		if bytes.Compare(bits, c.result) != 0 {
+			T.Errorf("%s: unexpected result %x, expected %x", c.name, bits, c.result)
+		}
+	}
+}
+
+func TestMatchInt64NotEqualAVX2(T *testing.T) {
+	for _, c := range int64NotEqualCases {
+		// pre-allocate the result slice and fill with poison
+		l := bitFieldLen(len(c.slice))
+		bits := make([]byte, l+32)
+		for i, _ := range bits {
+			bits[i] = 0xfa
+		}
+		bits = bits[:l]
+		cnt := matchInt64NotEqualAVX2(c.slice, c.match, bits)
+		if got, want := len(bits), len(c.result); got != want {
+			T.Errorf("%s: unexpected result length %d, expected %d", c.name, got, want)
+		}
+		if got, want := cnt, c.count; got != want {
+			T.Errorf("%s: unexpected result bit count %d, expected %d", c.name, got, want)
+		}
+		if bytes.Compare(bits, c.result) != 0 {
+			T.Errorf("%s: unexpected result %x, expected %x", c.name, bits, c.result)
+		}
+		if bytes.Compare(bits[l:l+32], bytes.Repeat([]byte{0xfa}, 32)) != 0 {
+			T.Errorf("%s: result boundary violation %x", c.name, bits[l:l+32])
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Not Equal benchmarks
+//
+func BenchmarkMatchInt64NotEqualGeneric(B *testing.B) {
+	for _, n := range []int{32, 128, 1024, 4096, 64 * 1024, 128 * 1024} {
+		B.Run(fmt.Sprintf("%d", n), func(B *testing.B) {
+			a := randInt64Slice(n, 1)
+			bits := make([]byte, bitFieldLen(len(a)))
+			B.ResetTimer()
+			B.SetBytes(int64(n * 8))
+			for i := 0; i < B.N; i++ {
+				matchInt64NotEqualGeneric(a, 5, bits)
+			}
+		})
+	}
+}
+
+func BenchmarkMatchInt64NotEqualAVX2(B *testing.B) {
+	for _, n := range []int{32, 128, 1024, 4096, 64 * 1024, 128 * 1024} {
+		B.Run(fmt.Sprintf("%d", n), func(B *testing.B) {
+			a := randInt64Slice(n, 1)
+			bits := make([]byte, bitFieldLen(len(a)))
+			B.ResetTimer()
+			B.SetBytes(int64(n * 8))
+			for i := 0; i < B.N; i++ {
+				matchInt64NotEqualAVX2(a, 5, bits)
+			}
+		})
+	}
+}
+
+// force scalar codepath by making last block <32 entries
+func BenchmarkMatchInt64NotEqualAVX2Scalar(B *testing.B) {
+	for _, n := range []int{32 - 1, 128 - 1, 1024 - 1, 4096 - 1, 64*1024 - 1, 128*1024 - 1} {
+		B.Run(fmt.Sprintf("%d", n), func(B *testing.B) {
+			a := randInt64Slice(n, 1)
+			bits := make([]byte, bitFieldLen(len(a)))
+			B.ResetTimer()
+			B.SetBytes(int64(n * 8))
+			for i := 0; i < B.N; i++ {
+				matchInt64NotEqualAVX2(a, 5, bits)
 			}
 		})
 	}
