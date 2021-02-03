@@ -368,7 +368,7 @@ func (l ConditionList) MaybeMatchPack(head PackageHeader) bool {
 	return true
 }
 
-func (l ConditionList) MatchPack(pkg *Package) *vec.BitSet {
+func (l ConditionList) MatchPack(pkg *Package, head PackageHeader) *vec.BitSet {
 	if len(l) == 0 || pkg.Len() == 0 {
 		allOnes := vec.NewBitSet(pkg.Len())
 		allOnes.One()
@@ -376,7 +376,55 @@ func (l ConditionList) MatchPack(pkg *Package) *vec.BitSet {
 	}
 	var bits *vec.BitSet
 	for _, c := range l {
-		b := c.MatchPack(pkg)
+		var b *vec.BitSet
+		// Quick inclusion check to skip matching when the current condition
+		// would return an all-true vector. Note that we do not have to check
+		// for an all-false vector because MaybeMatchPack() has already deselected
+		// packs of that kind (except the journal, but here we cannot rely on
+		// min/max values anyways and must exclude the journal explicitly).
+		if !pkg.IsJournal() && len(head.BlockHeaders) > c.Field.Index {
+			min, max := head.BlockHeaders[c.Field.Index].MinValue, head.BlockHeaders[c.Field.Index].MaxValue
+			switch c.Mode {
+			case FilterModeEqual:
+				// condition is always true iff min == max == c.Value
+				if c.Field.Type.Equal(min, c.Value) && c.Field.Type.Equal(max, c.Value) {
+					b = vec.NewBitSet(pkg.Len()).One()
+				}
+			case FilterModeNotEqual:
+				// condition is always true iff c.Value < min || c.Value > max
+				if c.Field.Type.Lt(c.Value, min) || c.Field.Type.Gt(c.Value, max) {
+					b = vec.NewBitSet(pkg.Len()).One()
+				}
+			case FilterModeRange:
+				// condition is always true iff pack range <= condition range
+				if c.Field.Type.Lte(c.From, min) && c.Field.Type.Gte(c.To, max) {
+					b = vec.NewBitSet(pkg.Len()).One()
+				}
+			case FilterModeGt:
+				// condition is always true iff min > c.Value
+				if c.Field.Type.Gt(min, c.Value) {
+					b = vec.NewBitSet(pkg.Len()).One()
+				}
+			case FilterModeGte:
+				// condition is always true iff min >= c.Value
+				if c.Field.Type.Gte(min, c.Value) {
+					b = vec.NewBitSet(pkg.Len()).One()
+				}
+			case FilterModeLt:
+				// condition is always true iff max < c.Value
+				if c.Field.Type.Lt(max, c.Value) {
+					b = vec.NewBitSet(pkg.Len()).One()
+				}
+			case FilterModeLte:
+				// condition is always true iff max <= c.Value
+				if c.Field.Type.Lte(max, c.Value) {
+					b = vec.NewBitSet(pkg.Len()).One()
+				}
+			}
+		}
+		if b == nil {
+			b = c.MatchPack(pkg, bits)
+		}
 		if bits == nil {
 			if b.Count() == 0 {
 				return b
@@ -390,11 +438,15 @@ func (l ConditionList) MatchPack(pkg *Package) *vec.BitSet {
 		}
 		bits.And(b)
 		b.Close()
+		// early stop on empty aggregate match
+		if bits.Count() == 0 {
+			break
+		}
 	}
 	return bits
 }
 
-func (c Condition) MatchPack(pkg *Package) *vec.BitSet {
+func (c Condition) MatchPack(pkg *Package, mask *vec.BitSet) *vec.BitSet {
 	bits := vec.NewBitSet(pkg.Len())
 	slice, _ := pkg.Column(c.Field.Index)
 	switch c.Mode {
@@ -418,6 +470,10 @@ func (c Condition) MatchPack(pkg *Package) *vec.BitSet {
 		switch c.Field.Type {
 		case FieldTypeInt64:
 			for i, v := range slice.([]int64) {
+				// skip masked values
+				if mask != nil && !mask.IsSet(i) {
+					continue
+				}
 				if _, ok := c.int64map[v]; ok {
 					bits.Set(i)
 				}
@@ -445,12 +501,19 @@ func (c Condition) MatchPack(pkg *Package) *vec.BitSet {
 						break
 					}
 					if pk[p] == in[i] {
-						bits.Set(p)
+						// blend masked values
+						if mask == nil || mask.IsSet(p) {
+							bits.Set(p)
+						}
 						i++
 					}
 				}
 			} else {
 				for i, v := range pk {
+					// skip masked values
+					if mask != nil && !mask.IsSet(i) {
+						continue
+					}
 					if _, ok := c.uint64map[v]; ok {
 						bits.Set(i)
 					}
@@ -459,6 +522,10 @@ func (c Condition) MatchPack(pkg *Package) *vec.BitSet {
 		case FieldTypeBytes:
 			vals := c.Value.([][]byte)
 			for i, v := range slice.([][]byte) {
+				// skip masked values
+				if mask != nil && !mask.IsSet(i) {
+					continue
+				}
 				if c.hashmap != nil {
 					sum := xxhash.Sum64(v)
 					if pos, ok := c.hashmap[sum]; ok {
@@ -489,6 +556,10 @@ func (c Condition) MatchPack(pkg *Package) *vec.BitSet {
 		case FieldTypeString:
 			strs := c.Value.([]string)
 			for i, v := range slice.([]string) {
+				// skip masked values
+				if mask != nil && !mask.IsSet(i) {
+					continue
+				}
 				if c.hashmap != nil {
 					sum := xxhash.Sum64([]byte(v))
 					if pos, ok := c.hashmap[sum]; ok {
@@ -523,6 +594,10 @@ func (c Condition) MatchPack(pkg *Package) *vec.BitSet {
 		switch c.Field.Type {
 		case FieldTypeInt64:
 			for i, v := range slice.([]int64) {
+				// skip masked values
+				if mask != nil && !mask.IsSet(i) {
+					continue
+				}
 				if _, ok := c.int64map[v]; !ok {
 					bits.Set(i)
 				}
@@ -558,6 +633,10 @@ func (c Condition) MatchPack(pkg *Package) *vec.BitSet {
 				bits.Neg()
 			} else {
 				for i, v := range pk {
+					// skip masked values
+					if mask != nil && !mask.IsSet(i) {
+						continue
+					}
 					if _, ok := c.uint64map[v]; !ok {
 						bits.Set(i)
 					}
@@ -567,6 +646,10 @@ func (c Condition) MatchPack(pkg *Package) *vec.BitSet {
 		case FieldTypeBytes:
 			vals := c.Value.([][]byte)
 			for i, v := range slice.([][]byte) {
+				// skip masked values
+				if mask != nil && !mask.IsSet(i) {
+					continue
+				}
 				if c.hashmap != nil {
 					sum := xxhash.Sum64(v)
 					if pos, ok := c.hashmap[sum]; !ok {
@@ -602,6 +685,10 @@ func (c Condition) MatchPack(pkg *Package) *vec.BitSet {
 		case FieldTypeString:
 			strs := c.Value.([]string)
 			for i, v := range slice.([]string) {
+				// skip masked values
+				if mask != nil && !mask.IsSet(i) {
+					continue
+				}
 				if c.hashmap != nil {
 					sum := xxhash.Sum64([]byte(v))
 					if pos, ok := c.hashmap[sum]; !ok {
@@ -628,7 +715,7 @@ func (c Condition) MatchPack(pkg *Package) *vec.BitSet {
 						}
 					}
 				} else {
-					if c.Field.Type.In(v, c.Value) {
+					if !c.Field.Type.In(v, c.Value) {
 						bits.Set(i)
 					}
 				}

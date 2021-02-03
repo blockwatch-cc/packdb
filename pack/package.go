@@ -49,6 +49,10 @@ func (p *Package) SetKey(key []byte) {
 	p.key = key
 }
 
+func (p *Package) IsJournal() bool {
+	return bytes.Compare(journalKey, p.key) == 0
+}
+
 func (p *Package) PkMap() map[uint64]int {
 	if p.pkmap != nil {
 		return p.pkmap

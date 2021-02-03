@@ -1648,7 +1648,7 @@ func (t *Table) QueryTx(ctx context.Context, tx *Tx, q Query) (*Result, error) {
 		}
 	}()
 
-	jbits = q.Conditions.MatchPack(t.journal)
+	jbits = q.Conditions.MatchPack(t.journal, PackageHeader{})
 	q.journalTime = time.Since(q.lap)
 
 	if err := q.QueryIndexes(ctx, tx); err != nil {
@@ -1685,7 +1685,7 @@ func (t *Table) QueryTx(ctx context.Context, tx *Tx, q Query) (*Result, error) {
 			}
 			q.packsScanned++
 
-			bits := q.Conditions.MatchPack(pkg)
+			bits := q.Conditions.MatchPack(pkg, t.packs.heads[p])
 			for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 				for i := idx; i < idx+length; i++ {
 					pkid, err := pkg.Uint64At(pkg.pkindex, i)
@@ -1700,16 +1700,14 @@ func (t *Table) QueryTx(ctx context.Context, tx *Tx, q Query) (*Result, error) {
 					src := pkg
 					index := i
 
-					if jbits.Count() > 0 {
-						if j := t.journal.PkIndex(pkid, 0); j >= 0 {
-							if !jbits.IsSet(j) {
-								continue
-							}
-
-							jbits.Clear(j)
-							src = t.journal
-							index = j
+					if j := t.journal.PkIndex(pkid, 0); j >= 0 {
+						if !jbits.IsSet(j) {
+							continue
 						}
+
+						jbits.Clear(j)
+						src = t.journal
+						index = j
 					}
 
 					if err := res.pkg.AppendFrom(src, index, 1, true); err != nil {
@@ -1779,7 +1777,7 @@ func (t *Table) QueryTxDesc(ctx context.Context, tx *Tx, q Query) (*Result, erro
 		}
 	}()
 
-	jbits = q.Conditions.MatchPack(t.journal).Reverse()
+	jbits = q.Conditions.MatchPack(t.journal, PackageHeader{}).Reverse()
 	q.journalTime = time.Since(q.lap)
 
 	if err := q.QueryIndexes(ctx, tx); err != nil {
@@ -1847,7 +1845,7 @@ func (t *Table) QueryTxDesc(ctx context.Context, tx *Tx, q Query) (*Result, erro
 			}
 			q.packsScanned++
 
-			bits := q.Conditions.MatchPack(pkg).Reverse()
+			bits := q.Conditions.MatchPack(pkg, t.packs.heads[p]).Reverse()
 			for idx, length := bits.Run(bits.Size() - 1); idx >= 0; idx, length = bits.Run(idx - length) {
 				for i := idx; i > idx-length; i-- {
 					pkid, err := pkg.Uint64At(pkg.pkindex, i)
@@ -1862,15 +1860,13 @@ func (t *Table) QueryTxDesc(ctx context.Context, tx *Tx, q Query) (*Result, erro
 					src := pkg
 					index := i
 
-					if jbits.Count() > 0 {
-						if j := t.journal.PkIndex(pkid, 0); j >= 0 {
-							if !jbits.IsSet(j) {
-								continue
-							}
-							jbits.Clear(j)
-							src = t.journal
-							index = j
+					if j := t.journal.PkIndex(pkid, 0); j >= 0 {
+						if !jbits.IsSet(j) {
+							continue
 						}
+						jbits.Clear(j)
+						src = t.journal
+						index = j
 					}
 
 					if err := res.pkg.AppendFrom(src, index, 1, true); err != nil {
@@ -1927,7 +1923,7 @@ func (t *Table) CountTx(ctx context.Context, tx *Tx, q Query) (int64, error) {
 		q.Close()
 	}()
 
-	jbits = q.Conditions.MatchPack(t.journal)
+	jbits = q.Conditions.MatchPack(t.journal, PackageHeader{})
 	q.journalTime = time.Since(q.lap)
 
 	if err := q.QueryIndexes(ctx, tx); err != nil {
@@ -1951,7 +1947,7 @@ func (t *Table) CountTx(ctx context.Context, tx *Tx, q Query) (int64, error) {
 			}
 			q.packsScanned++
 
-			bits := q.Conditions.MatchPack(pkg)
+			bits := q.Conditions.MatchPack(pkg, t.packs.heads[p])
 			for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 				for i := idx; i < idx+length; i++ {
 					pkid, err := pkg.Uint64At(pkg.pkindex, i)
@@ -1963,13 +1959,11 @@ func (t *Table) CountTx(ctx context.Context, tx *Tx, q Query) (int64, error) {
 						continue
 					}
 
-					if jbits.Count() > 0 {
-						if j := t.journal.PkIndex(pkid, 0); j >= 0 {
-							if !jbits.IsSet(j) {
-								continue
-							}
-							jbits.Clear(j)
+					if j := t.journal.PkIndex(pkid, 0); j >= 0 {
+						if !jbits.IsSet(j) {
+							continue
 						}
+						jbits.Clear(j)
 					}
 
 					q.rowsMatched++
@@ -2023,7 +2017,7 @@ func (t *Table) StreamTx(ctx context.Context, tx *Tx, q Query, fn func(r Row) er
 		q.Close()
 	}()
 
-	jbits = q.Conditions.MatchPack(t.journal)
+	jbits = q.Conditions.MatchPack(t.journal, PackageHeader{})
 	q.journalTime = time.Since(q.lap)
 
 	if err := q.QueryIndexes(ctx, tx); err != nil {
@@ -2050,7 +2044,7 @@ func (t *Table) StreamTx(ctx context.Context, tx *Tx, q Query, fn func(r Row) er
 			}
 			q.packsScanned++
 
-			bits := q.Conditions.MatchPack(pkg)
+			bits := q.Conditions.MatchPack(pkg, t.packs.heads[p])
 			for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 				for i := idx; i < idx+length; i++ {
 					pkid, err := pkg.Uint64At(pkg.pkindex, i)
@@ -2065,15 +2059,13 @@ func (t *Table) StreamTx(ctx context.Context, tx *Tx, q Query, fn func(r Row) er
 					res.pkg = pkg
 					index := i
 
-					if jbits.Count() > 0 {
-						if j := t.journal.PkIndex(pkid, 0); j >= 0 {
-							if !jbits.IsSet(j) {
-								continue
-							}
-							res.pkg = t.journal
-							index = j
-							jbits.Clear(j)
+					if j := t.journal.PkIndex(pkid, 0); j >= 0 {
+						if !jbits.IsSet(j) {
+							continue
 						}
+						res.pkg = t.journal
+						index = j
+						jbits.Clear(j)
 					}
 
 					if err := fn(Row{res: &res, n: index}); err != nil {
@@ -2143,7 +2135,7 @@ func (t *Table) StreamTxDesc(ctx context.Context, tx *Tx, q Query, fn func(r Row
 		q.Close()
 	}()
 
-	jbits = q.Conditions.MatchPack(t.journal).Reverse()
+	jbits = q.Conditions.MatchPack(t.journal, PackageHeader{}).Reverse()
 	q.journalTime = time.Since(q.lap)
 
 	if err := q.QueryIndexes(ctx, tx); err != nil {
@@ -2199,7 +2191,7 @@ func (t *Table) StreamTxDesc(ctx context.Context, tx *Tx, q Query, fn func(r Row
 			}
 			q.packsScanned++
 
-			bits := q.Conditions.MatchPack(pkg).Reverse()
+			bits := q.Conditions.MatchPack(pkg, t.packs.heads[p]).Reverse()
 			for idx, length := bits.Run(bits.Size() - 1); idx >= 0; idx, length = bits.Run(idx - length) {
 				for i := idx; i > idx-length; i-- {
 					pkid, err := pkg.Uint64At(pkg.pkindex, i)
@@ -2214,15 +2206,13 @@ func (t *Table) StreamTxDesc(ctx context.Context, tx *Tx, q Query, fn func(r Row
 					res.pkg = pkg
 					index := i
 
-					if jbits.Count() > 0 {
-						if j := t.journal.PkIndex(pkid, 0); j >= 0 {
-							if !jbits.IsSet(j) {
-								continue
-							}
-							res.pkg = t.journal
-							index = j
-							jbits.Clear(j)
+					if j := t.journal.PkIndex(pkid, 0); j >= 0 {
+						if !jbits.IsSet(j) {
+							continue
 						}
+						res.pkg = t.journal
+						index = j
+						jbits.Clear(j)
 					}
 
 					if err := fn(Row{res: &res, n: index}); err != nil {
