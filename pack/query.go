@@ -19,8 +19,9 @@ import (
 var QueryLogMinDuration time.Duration = 500 * time.Millisecond
 
 type Query struct {
-	Name       string // optional, used for query stats
-	NoCache    bool
+	Name       string        // optional, used for query stats
+	NoCache    bool          // explicitly disable pack caching for this query
+	NoIndex    bool          // explicitly disable index query (use for many known duplicates)
 	Fields     FieldList     // SELECT ...
 	Conditions ConditionList // WHERE ... AND (TODO: OR)
 	Order      OrderType     // ASC|DESC
@@ -155,6 +156,10 @@ func (q Query) Check() error {
 
 func (q *Query) QueryIndexes(ctx context.Context, tx *Tx) error {
 	q.lap = time.Now()
+	if q.NoIndex {
+		q.indexTime = time.Since(q.lap)
+		return nil
+	}
 	idxFields := q.table.fields.Indexed()
 	for i, cond := range q.Conditions {
 		if !idxFields.Contains(cond.Field.Name) {
