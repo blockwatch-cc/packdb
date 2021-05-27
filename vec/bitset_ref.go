@@ -26,7 +26,7 @@ func bitsetNeg(src []byte, size int) {
 }
 
 func bitsetReverse(src []byte) {
-	return bitsetReverseGeneric(src, index, size)
+	bitsetReverseGeneric(src)
 }
 
 func bitsetPopCount(src []byte, size int) int64 {
