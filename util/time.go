@@ -342,3 +342,17 @@ func UnixNanoNonZero(t time.Time) int64 {
 	}
 	return t.UnixNano()
 }
+
+func StepsBetween(t1, t2 time.Time, d time.Duration) []time.Time {
+	steps := make([]time.Time, 0)
+	if t2.After(t1) && d > 0 {
+		for {
+			t1 = t1.Add(d)
+			if !t1.Before(t2) {
+				break
+			}
+			steps = append(steps, t1)
+		}
+	}
+	return steps
+}
