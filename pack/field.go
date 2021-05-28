@@ -50,18 +50,6 @@ const (
 	FieldTypeFloat64   FieldType = "float64"  // BlockFloat
 	FieldTypeInt64     FieldType = "int64"    // BlockInt
 	FieldTypeUint64    FieldType = "uint64"   // BlockUnsigned
-
-	// TODO: extend pack encoders and block types
-	// FieldTypeInt8
-	// FieldTypeUint8
-	// FieldTypeInt16
-	// FieldTypeUint16
-	// FieldTypeInt32
-	// FieldTypeUint32
-	// FieldTypeDate                   = "date" // BlockDate (unix second / 24*3600)
-	// FieldTypeDecimal36_8            = "decimal_36_8" // bigint
-	// FieldTypeDecimal36_10           = "decimal_36_10"// bigint
-	// FieldTypeDecimal36_12           = "decimal_36_12"// bigint
 )
 
 type Field struct {
@@ -105,11 +93,11 @@ func (l FieldList) Aliases() []string {
 
 func (l FieldList) Find(name string) Field {
 	for _, v := range l {
-		if v.Name == name {
+		if v.Name == name || v.Alias == name {
 			return v
 		}
 	}
-	return Field{Index: -1}
+	return Field{Index: -1, Name: name, Alias: name}
 }
 
 func (l FieldList) Select(names ...string) FieldList {
@@ -167,7 +155,7 @@ func (l FieldList) PkIndex() int {
 
 func (l FieldList) Contains(name string) bool {
 	for _, v := range l {
-		if v.Name == name {
+		if v.Name == name || v.Alias == name {
 			return true
 		}
 	}
@@ -235,6 +223,14 @@ func Fields(proto interface{}) (FieldList, error) {
 			if f.CanInterface() && f.Type().Implements(binaryMarshalerType) {
 				log.Debugf("Slice type field %s type %s implements binary marshaler", finfo.name, f.Type().String())
 				fields[i].Type = FieldTypeBytes
+				break
+			}
+			if f.CanInterface() && f.Type().Implements(textMarshalerType) {
+				fields[i].Type = FieldTypeString
+				break
+			}
+			if f.CanInterface() && f.Type().Implements(stringerType) {
+				fields[i].Type = FieldTypeString
 				break
 			}
 			if f.Type() != byteSliceType {
@@ -501,121 +497,6 @@ func (t FieldType) ToString(val interface{}) string {
 		return strings.Join(ss, ", ")
 	}
 	return util.ToString(val)
-}
-
-func (t FieldType) CheckType(val interface{}) error {
-	var ok bool
-	switch t {
-	case FieldTypeBytes:
-		_, ok = val.([]byte)
-	case FieldTypeString:
-		_, ok = val.(string)
-	case FieldTypeDatetime:
-		_, ok = val.(time.Time)
-	case FieldTypeBoolean:
-		_, ok = val.(bool)
-	case FieldTypeInt64:
-		// FIXME: allow int, int8, int16, int32, int64
-		// switch val.(type) {
-		// case int:
-		// 	ok = true
-		// case int8:
-		// 	ok = true
-		// case int16:
-		// 	ok = true
-		// case int32:
-		// 	ok = true
-		// case int64:
-		// 	ok = true
-		// }
-		_, ok = val.(int64)
-	case FieldTypeUint64:
-		_, ok = val.(uint64)
-	case FieldTypeFloat64:
-		_, ok = val.(float64)
-	}
-	if !ok {
-		return fmt.Errorf("unexpected value type %T for %s condition", val, t)
-	}
-	return nil
-}
-
-func (t FieldType) CheckSliceType(val interface{}) error {
-	var ok bool
-	switch t {
-	case FieldTypeBytes:
-		_, ok = val.([][]byte)
-	case FieldTypeString:
-		_, ok = val.([]string)
-	case FieldTypeDatetime:
-		_, ok = val.([]time.Time)
-	case FieldTypeBoolean:
-		_, ok = val.([]bool)
-	case FieldTypeInt64:
-		_, ok = val.([]int64)
-	case FieldTypeUint64:
-		_, ok = val.([]uint64)
-	case FieldTypeFloat64:
-		_, ok = val.([]float64)
-	}
-	if !ok {
-		return fmt.Errorf("unexpected value type %T for %s slice condition", val, t)
-	}
-	return nil
-}
-
-func (t FieldType) CopySliceType(val interface{}) (interface{}, error) {
-	switch t {
-	case FieldTypeBytes:
-		if slice, ok := val.([][]byte); ok {
-			cp := make([][]byte, len(slice))
-			for i, v := range slice {
-				buf := make([]byte, len(v))
-				copy(buf, v)
-				cp[i] = buf
-			}
-			return cp, nil
-		}
-	case FieldTypeString:
-		if slice, ok := val.([]string); ok {
-			cp := make([]string, len(slice))
-			copy(cp, slice)
-			return cp, nil
-		}
-	case FieldTypeDatetime:
-		if slice, ok := val.([]time.Time); ok {
-			cp := make([]time.Time, len(slice))
-			copy(cp, slice)
-			return cp, nil
-		}
-	case FieldTypeBoolean:
-		if slice, ok := val.([]time.Time); ok {
-			cp := make([]time.Time, len(slice))
-			copy(cp, slice)
-			return cp, nil
-		}
-	case FieldTypeInt64:
-		if slice, ok := val.([]int64); ok {
-			cp := make([]int64, len(slice))
-			copy(cp, slice)
-			return cp, nil
-		}
-	case FieldTypeUint64:
-		if slice, ok := val.([]uint64); ok {
-			cp := make([]uint64, len(slice))
-			copy(cp, slice)
-			return cp, nil
-		}
-	case FieldTypeFloat64:
-		if slice, ok := val.([]float64); ok {
-			cp := make([]float64, len(slice))
-			copy(cp, slice)
-			return cp, nil
-		}
-	default:
-		return nil, fmt.Errorf("slice copy: unsupported field type %s", t)
-	}
-	return nil, fmt.Errorf("slice copy: mismatched value type %T for %s field", val, t)
 }
 
 func (t FieldType) Equal(xa, xb interface{}) bool {

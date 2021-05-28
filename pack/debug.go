@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"blockwatch.cc/packdb/encoding/block"
@@ -32,7 +33,7 @@ type CSVHeader struct {
 }
 
 func (t *Table) DumpType(w io.Writer) error {
-	return t.journal.DumpType(w)
+	return t.journal.DataPack().DumpType(w)
 }
 
 func (t *Table) DumpPackHeaders(w io.Writer, mode DumpMode) error {
@@ -61,21 +62,32 @@ func (t *Table) DumpPackHeaders(w io.Writer, mode DumpMode) error {
 		fmt.Fprintf(w, "%-3d ", i)
 		i++
 	}
-	if err := t.journal.Header().Dump(w, mode); err != nil {
-		return err
-	}
-	switch mode {
-	case DumpModeDec, DumpModeHex:
-		fmt.Fprintf(w, "%-3d ", i)
-	}
-	if err := t.tombstone.Header().Dump(w, mode); err != nil {
+	if err := t.journal.DataPack().Header().Dump(w, mode); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (t *Table) DumpJournal(w io.Writer, mode DumpMode) error {
-	return t.journal.DumpData(w, mode, t.fields.Aliases())
+	err := t.journal.DataPack().DumpData(w, mode, t.fields.Aliases())
+	if err != nil {
+		return err
+	}
+	w.Write([]byte("keys:"))
+	for _, v := range t.journal.keys {
+		w.Write([]byte(strconv.FormatUint(v.pk, 10)))
+		w.Write([]byte(">"))
+		w.Write([]byte(strconv.Itoa(v.idx)))
+		w.Write([]byte(","))
+	}
+	w.Write([]byte("\n"))
+	w.Write([]byte("tomb:"))
+	for _, v := range t.journal.tomb {
+		w.Write([]byte(strconv.FormatUint(v, 10)))
+		w.Write([]byte(","))
+	}
+	w.Write([]byte("\n"))
+	return nil
 }
 
 func (t *Table) DumpPack(w io.Writer, i int, mode DumpMode) error {
@@ -273,17 +285,16 @@ func (p *Package) DumpType(w io.Writer) error {
 		} else {
 			sz = p.rawsize - p.offsets[i]
 		}
-		head := v.CloneHeader()
 		fmt.Fprintf(w, "Block %-02d:   %s typ=%d comp=%s flags=%d prec=%d len=%d min=%s max=%s sz=%s %s %s\n",
 			i,
 			p.names[i],
-			head.Type,
-			head.Compression,
-			head.Flags,
-			head.Precision,
+			v.Type,
+			v.Compression,
+			v.Flags,
+			v.Precision,
 			v.Len(),
-			util.ToString(head.MinValue),
-			util.ToString(head.MaxValue),
+			util.ToString(v.MinValue),
+			util.ToString(v.MaxValue),
 			util.PrettyInt(sz),
 			fi,
 			d)
@@ -471,4 +482,27 @@ func (p *Package) DumpData(w io.Writer, mode DumpMode, aliases []string) error {
 		}
 	}
 	return nil
+}
+
+func (n ConditionTreeNode) Dump(level int, w io.Writer) {
+	if n.Leaf() {
+		fmt.Fprintln(w, strings.Repeat("  ", level), n.Cond.String())
+	}
+	if len(n.Children) > 0 {
+		kind := "AND"
+		if n.OrKind {
+			kind = "OR"
+		}
+		fmt.Fprintln(w, strings.Repeat("  ", level), kind)
+	}
+	for _, v := range n.Children {
+		v.Dump(level+1, w)
+	}
+}
+
+func (q Query) Dump() string {
+	buf := bytes.NewBuffer(nil)
+	fmt.Fprintln(buf, "Query:", q.Name, "=>")
+	q.Conditions.Dump(0, buf)
+	return string(buf.Bytes())
 }

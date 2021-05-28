@@ -1,5 +1,6 @@
 // Copyright (c) 2018-2020 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
+// +build ignore
 
 // TODO
 // - complex predicates "JOIN ON a.f = b.f AND a.id = b.id"

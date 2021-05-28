@@ -131,6 +131,13 @@ func (p *Package) Contains(fields FieldList) bool {
 	return true
 }
 
+func (p *Package) PkColumn() []uint64 {
+	if p.pkindex < 0 {
+		return []uint64{}
+	}
+	return p.blocks[p.pkindex].Unsigneds
+}
+
 func (p *Package) initType(v interface{}) error {
 	if p.tinfo != nil && p.tinfo.gotype {
 		return nil
@@ -205,6 +212,14 @@ func (p *Package) Init(v interface{}, sz int) error {
 		case reflect.Slice:
 			if f.CanInterface() && f.Type().Implements(binaryMarshalerType) {
 				p.blocks[i] = NewBlock(BlockBytes, sz, finfo.flags.Compression(), 0, 0)
+				break
+			}
+			if f.CanInterface() && f.Type().Implements(textMarshalerType) {
+				p.blocks[i] = NewBlock(BlockString, sz, finfo.flags.Compression(), 0, 0)
+				break
+			}
+			if f.CanInterface() && f.Type().Implements(stringerType) {
+				p.blocks[i] = NewBlock(BlockString, sz, finfo.flags.Compression(), 0, 0)
 				break
 			}
 			if f.Type() != byteSliceType {
@@ -414,7 +429,17 @@ func (p *Package) Push(v interface{}) error {
 			p.blocks[blockId].Floats = append(p.blocks[blockId].Floats, f.Float())
 
 		case BlockString:
-			p.blocks[blockId].Strings = append(p.blocks[blockId].Strings, f.String())
+			if f.CanInterface() && f.Type().Implements(textMarshalerType) {
+				txt, err := f.Interface().(encoding.TextMarshaler).MarshalText()
+				if err != nil {
+					return err
+				}
+				p.blocks[blockId].Strings = append(p.blocks[blockId].Strings, string(txt))
+			} else if f.CanInterface() && f.Type().Implements(stringerType) {
+				p.blocks[blockId].Strings = append(p.blocks[blockId].Strings, f.Interface().(fmt.Stringer).String())
+			} else {
+				p.blocks[blockId].Strings = append(p.blocks[blockId].Strings, f.String())
+			}
 
 		case BlockBytes:
 			var amount []byte
@@ -495,8 +520,17 @@ func (p *Package) ReplaceAt(pos int, v interface{}) error {
 			p.blocks[blockId].Floats[pos] = amount
 
 		case BlockString:
-			amount := f.String()
-			p.blocks[blockId].Strings[pos] = amount
+			if f.CanInterface() && f.Type().Implements(textMarshalerType) {
+				txt, err := f.Interface().(encoding.TextMarshaler).MarshalText()
+				if err != nil {
+					return err
+				}
+				p.blocks[blockId].Strings[pos] = string(txt)
+			} else if f.CanInterface() && f.Type().Implements(stringerType) {
+				p.blocks[blockId].Strings[pos] = f.Interface().(fmt.Stringer).String()
+			} else {
+				p.blocks[blockId].Strings[pos] = f.String()
+			}
 
 		case BlockBytes:
 			var amount []byte
@@ -593,6 +627,15 @@ func (p *Package) ReadAtWithInfo(pos int, v interface{}, tinfo *typeInfo) error 
 			dst.SetFloat(b.Floats[pos])
 
 		case BlockString:
+			if dst.CanAddr() {
+				pv := dst.Addr()
+				if pv.CanInterface() && pv.Type().Implements(textUnmarshalerType) {
+					if err := pv.Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(b.Strings[pos])); err != nil {
+						return err
+					}
+					break
+				}
+			}
 			dst.SetString(b.Strings[pos])
 
 		case BlockBytes:
@@ -711,8 +754,18 @@ func (p *Package) SetFieldAt(index, pos int, v interface{}) error {
 		amount := val.Float()
 		p.blocks[index].Floats[pos] = amount
 	case BlockString:
-		amount := val.String()
-		p.blocks[index].Strings[pos] = amount
+		if val.CanInterface() && val.Type().Implements(textMarshalerType) {
+			txt, err := val.Interface().(encoding.TextMarshaler).MarshalText()
+			if err != nil {
+				return err
+			}
+			p.blocks[index].Strings[pos] = string(txt)
+		} else if val.CanInterface() && val.Type().Implements(stringerType) {
+			p.blocks[index].Strings[pos] = val.Interface().(fmt.Stringer).String()
+		} else {
+			p.blocks[index].Strings[pos] = val.String()
+		}
+
 	case BlockBytes:
 		var amount []byte
 		if val.CanInterface() && val.Type().Implements(binaryMarshalerType) {

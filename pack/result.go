@@ -144,6 +144,10 @@ func (r *Result) Walk(fn func(r Row) error) error {
 	return nil
 }
 
+func (r *Result) PkColumn() []uint64 {
+	return r.pkg.PkColumn()
+}
+
 func (r *Result) Column(colname string) (interface{}, error) {
 	if r.pkg == nil {
 		return nil, ErrResultClosed

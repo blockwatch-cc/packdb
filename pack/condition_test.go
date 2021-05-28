@@ -179,14 +179,13 @@ func BenchmarkConditionLoop1(B *testing.B) {
 	for _, n := range packBenchmarkSizes {
 		B.Run(n.name, func(B *testing.B) {
 			pkg := makeTestPackage(n.l)
-			conds := ConditionList{
-				Condition{
-					Field: f1,
-					Mode:  FilterModeGt,
-					Value: uint64(n.l / 2),
-				},
-			}
-			conds.Compile(&Table{name: "test"})
+			conds := ConditionTreeNode{}
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeGt,
+				Value: uint64(n.l / 2),
+			})
+			conds.Compile()
 			B.ResetTimer()
 			B.ReportAllocs()
 			B.SetBytes(int64(n.l) * 8)
@@ -194,19 +193,12 @@ func BenchmarkConditionLoop1(B *testing.B) {
 				// this is the core of a typical matching loop
 				// as used in the current table implementation
 				for i, l := 0, pkg.Len(); i < l; i++ {
-					ismatch := true
-					for c, cl := 0, len(conds); c < cl; c++ {
-						ismatch = conds[c].MatchAt(pkg, i)
-						if !ismatch {
-							break
-						}
-					}
-					// skip non-matches
+					ismatch := conds.MatchAt(pkg, i)
 					if !ismatch {
 						continue
 					}
-					// handle row
 				}
+				// handle row
 			}
 		})
 	}
@@ -216,19 +208,18 @@ func BenchmarkConditionLoop2(B *testing.B) {
 	for _, n := range packBenchmarkSizes {
 		B.Run(n.name, func(B *testing.B) {
 			pkg := makeTestPackage(n.l)
-			conds := ConditionList{
-				Condition{
-					Field: f1,
-					Mode:  FilterModeGt,
-					Value: uint64(n.l / 2),
-				},
-				Condition{
-					Field: f2,
-					Mode:  FilterModeLt,
-					Value: int64(8),
-				},
-			}
-			conds.Compile(&Table{name: "test"})
+			conds := ConditionTreeNode{}
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeGt,
+				Value: uint64(n.l / 2),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f2,
+				Mode:  FilterModeLt,
+				Value: int64(8),
+			})
+			conds.Compile()
 			B.ResetTimer()
 			B.ReportAllocs()
 			B.SetBytes(int64(n.l) * 8)
@@ -236,19 +227,12 @@ func BenchmarkConditionLoop2(B *testing.B) {
 				// this is the core of a typical matching loop
 				// as used in the current table implementation
 				for i, l := 0, pkg.Len(); i < l; i++ {
-					ismatch := true
-					for c, cl := 0, len(conds); c < cl; c++ {
-						ismatch = conds[c].MatchAt(pkg, i)
-						if !ismatch {
-							break
-						}
-					}
-					// skip non-matches
+					ismatch := conds.MatchAt(pkg, i)
 					if !ismatch {
 						continue
 					}
-					// handle row
 				}
+				// handle row
 			}
 		})
 	}
@@ -258,29 +242,28 @@ func BenchmarkConditionLoop4(B *testing.B) {
 	for _, n := range packBenchmarkSizes {
 		B.Run(n.name, func(B *testing.B) {
 			pkg := makeTestPackage(n.l)
-			conds := ConditionList{
-				Condition{
-					Field: f1,
-					Mode:  FilterModeGt,
-					Value: uint64(n.l / 2),
-				},
-				Condition{
-					Field: f1,
-					Mode:  FilterModeLt,
-					Value: uint64(n.l / 4 * 3),
-				},
-				Condition{
-					Field: f2,
-					Mode:  FilterModeLt,
-					Value: int64(8),
-				},
-				Condition{
-					Field: f2,
-					Mode:  FilterModeGt,
-					Value: int64(3),
-				},
-			}
-			conds.Compile(&Table{name: "test"})
+			conds := ConditionTreeNode{}
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeGt,
+				Value: uint64(n.l / 2),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeLt,
+				Value: uint64(n.l / 4 * 3),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f2,
+				Mode:  FilterModeLt,
+				Value: int64(8),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f2,
+				Mode:  FilterModeGt,
+				Value: int64(3),
+			})
+			conds.Compile()
 			B.ResetTimer()
 			B.ReportAllocs()
 			B.SetBytes(int64(n.l) * 8)
@@ -288,19 +271,12 @@ func BenchmarkConditionLoop4(B *testing.B) {
 				// this is the core of a typical matching loop
 				// as used in the current table implementation
 				for i, l := 0, pkg.Len(); i < l; i++ {
-					ismatch := true
-					for c, cl := 0, len(conds); c < cl; c++ {
-						ismatch = conds[c].MatchAt(pkg, i)
-						if !ismatch {
-							break
-						}
-					}
-					// skip non-matches
+					ismatch := conds.MatchAt(pkg, i)
 					if !ismatch {
 						continue
 					}
-					// handle row
 				}
+				// handle row
 			}
 		})
 	}
@@ -310,39 +286,38 @@ func BenchmarkConditionLoop6(B *testing.B) {
 	for _, n := range packBenchmarkSizes {
 		B.Run(n.name, func(B *testing.B) {
 			pkg := makeTestPackage(n.l)
-			conds := ConditionList{
-				Condition{
-					Field: f1,
-					Mode:  FilterModeGt,
-					Value: uint64(n.l / 2),
-				},
-				Condition{
-					Field: f1,
-					Mode:  FilterModeLt,
-					Value: uint64(n.l / 4 * 3),
-				},
-				Condition{
-					Field: f2,
-					Mode:  FilterModeLt,
-					Value: int64(8),
-				},
-				Condition{
-					Field: f2,
-					Mode:  FilterModeGt,
-					Value: int64(3),
-				},
-				Condition{
-					Field: f3,
-					Mode:  FilterModeLt,
-					Value: float64(100.0),
-				},
-				Condition{
-					Field: f3,
-					Mode:  FilterModeGt,
-					Value: float64(-10000.1),
-				},
-			}
-			conds.Compile(&Table{name: "test"})
+			conds := ConditionTreeNode{}
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeGt,
+				Value: uint64(n.l / 2),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeLt,
+				Value: uint64(n.l / 4 * 3),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f2,
+				Mode:  FilterModeLt,
+				Value: int64(8),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f2,
+				Mode:  FilterModeGt,
+				Value: int64(3),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f3,
+				Mode:  FilterModeLt,
+				Value: float64(100.0),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f3,
+				Mode:  FilterModeGt,
+				Value: float64(-10000.1),
+			})
+			conds.Compile()
 			B.ResetTimer()
 			B.ReportAllocs()
 			B.SetBytes(int64(n.l) * 8)
@@ -350,14 +325,7 @@ func BenchmarkConditionLoop6(B *testing.B) {
 				// this is the core of a typical matching loop
 				// as used in the current table implementation
 				for i, l := 0, pkg.Len(); i < l; i++ {
-					ismatch := true
-					for c, cl := 0, len(conds); c < cl; c++ {
-						ismatch = conds[c].MatchAt(pkg, i)
-						if !ismatch {
-							break
-						}
-					}
-					// skip non-matches
+					ismatch := conds.MatchAt(pkg, i)
 					if !ismatch {
 						continue
 					}
@@ -372,20 +340,19 @@ func BenchmarkConditionVector1(B *testing.B) {
 	for _, n := range packBenchmarkSizes {
 		B.Run(n.name, func(B *testing.B) {
 			pkg := makeTestPackage(n.l)
-			conds := ConditionList{
-				Condition{
-					Field: f1,
-					Mode:  FilterModeGte,
-					Value: uint64(n.l / 2),
-				},
-			}
-			conds.Compile(&Table{name: "test"})
+			conds := ConditionTreeNode{}
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeGte,
+				Value: uint64(n.l / 2),
+			})
+			conds.Compile()
 			B.ResetTimer()
 			B.ReportAllocs()
 			B.SetBytes(int64(n.l) * 8)
 			for b := 0; b < B.N; b++ {
 				// this is the core of a new matching loop design
-				bits := conds.MatchPack(pkg)
+				bits := conds.MatchPack(pkg, PackageHeader{})
 				for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 					// handle rows
 				}
@@ -399,25 +366,24 @@ func BenchmarkConditionVector2(B *testing.B) {
 	for _, n := range packBenchmarkSizes {
 		B.Run(n.name, func(B *testing.B) {
 			pkg := makeTestPackage(n.l)
-			conds := ConditionList{
-				Condition{
-					Field: f1,
-					Mode:  FilterModeGte,
-					Value: uint64(n.l / 2),
-				},
-				Condition{
-					Field: f2,
-					Mode:  FilterModeLt,
-					Value: int64(8),
-				},
-			}
-			conds.Compile(&Table{name: "test"})
+			conds := ConditionTreeNode{}
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeGte,
+				Value: uint64(n.l / 2),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f2,
+				Mode:  FilterModeLt,
+				Value: int64(8),
+			})
+			conds.Compile()
 			B.ResetTimer()
 			B.ReportAllocs()
 			B.SetBytes(int64(n.l) * 8)
 			for b := 0; b < B.N; b++ {
 				// this is the core of a new matching loop design
-				bits := conds.MatchPack(pkg)
+				bits := conds.MatchPack(pkg, PackageHeader{})
 				for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 					// handle rows
 				}
@@ -431,35 +397,34 @@ func BenchmarkConditionVector4(B *testing.B) {
 	for _, n := range packBenchmarkSizes {
 		B.Run(n.name, func(B *testing.B) {
 			pkg := makeTestPackage(n.l)
-			conds := ConditionList{
-				Condition{
-					Field: f1,
-					Mode:  FilterModeGte,
-					Value: uint64(n.l / 2),
-				},
-				Condition{
-					Field: f1,
-					Mode:  FilterModeLt,
-					Value: uint64(n.l / 4 * 3),
-				},
-				Condition{
-					Field: f2,
-					Mode:  FilterModeLt,
-					Value: int64(8),
-				},
-				Condition{
-					Field: f2,
-					Mode:  FilterModeGt,
-					Value: int64(3),
-				},
-			}
-			conds.Compile(&Table{name: "test"})
+			conds := ConditionTreeNode{}
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeGte,
+				Value: uint64(n.l / 2),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeLt,
+				Value: uint64(n.l / 4 * 3),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f2,
+				Mode:  FilterModeLt,
+				Value: int64(8),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f2,
+				Mode:  FilterModeGt,
+				Value: int64(3),
+			})
+			conds.Compile()
 			B.ResetTimer()
 			B.ReportAllocs()
 			B.SetBytes(int64(n.l) * 8)
 			for b := 0; b < B.N; b++ {
 				// this is the core of a new matching loop design
-				bits := conds.MatchPack(pkg)
+				bits := conds.MatchPack(pkg, PackageHeader{})
 				for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 					// handle rows
 				}
@@ -473,45 +438,44 @@ func BenchmarkConditionVector6(B *testing.B) {
 	for _, n := range packBenchmarkSizes {
 		B.Run(n.name, func(B *testing.B) {
 			pkg := makeTestPackage(n.l)
-			conds := ConditionList{
-				Condition{
-					Field: f1,
-					Mode:  FilterModeGte,
-					Value: uint64(n.l / 2),
-				},
-				Condition{
-					Field: f1,
-					Mode:  FilterModeLt,
-					Value: uint64(n.l / 4 * 3),
-				},
-				Condition{
-					Field: f2,
-					Mode:  FilterModeLt,
-					Value: int64(8),
-				},
-				Condition{
-					Field: f2,
-					Mode:  FilterModeGt,
-					Value: int64(3),
-				},
-				Condition{
-					Field: f3,
-					Mode:  FilterModeLt,
-					Value: float64(100.0),
-				},
-				Condition{
-					Field: f3,
-					Mode:  FilterModeGt,
-					Value: float64(-10000.1),
-				},
-			}
-			conds.Compile(&Table{name: "test"})
+			conds := ConditionTreeNode{}
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeGte,
+				Value: uint64(n.l / 2),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f1,
+				Mode:  FilterModeLt,
+				Value: uint64(n.l / 4 * 3),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f2,
+				Mode:  FilterModeLt,
+				Value: int64(8),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f2,
+				Mode:  FilterModeGt,
+				Value: int64(3),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f3,
+				Mode:  FilterModeLt,
+				Value: float64(100.0),
+			})
+			conds.AddAndCondition(&Condition{
+				Field: f3,
+				Mode:  FilterModeGt,
+				Value: float64(-10000.1),
+			})
+			conds.Compile()
 			B.ResetTimer()
 			B.ReportAllocs()
 			B.SetBytes(int64(n.l) * 8)
 			for b := 0; b < B.N; b++ {
 				// this is the core of a new matching loop design
-				bits := conds.MatchPack(pkg)
+				bits := conds.MatchPack(pkg, PackageHeader{})
 				for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 					// handle rows
 				}
@@ -560,14 +524,13 @@ func BenchmarkInConditionLoop(B *testing.B) {
 			// add random values
 			inSlice = append(inSlice, randByteSlice(checkN, 32)...)
 
-			conds := ConditionList{
-				Condition{
-					Field: f4,
-					Mode:  FilterModeIn,
-					Value: inSlice,
-				},
-			}
-			conds.Compile(&Table{name: "test"})
+			conds := ConditionTreeNode{}
+			conds.AddAndCondition(&Condition{
+				Field: f4,
+				Mode:  FilterModeIn,
+				Value: inSlice,
+			})
+			conds.Compile()
 			B.ResetTimer()
 			B.ReportAllocs()
 			B.SetBytes(int64(n.l) * 32)
@@ -576,15 +539,9 @@ func BenchmarkInConditionLoop(B *testing.B) {
 				// as used in the current table implementation
 				for i, l := 0, pkg.Len(); i < l; i++ {
 					ismatch := true
-					for c, cl := 0, len(conds); c < cl; c++ {
-						ismatch = conds[c].MatchAt(pkg, i)
-						if !ismatch {
-							break
-						}
-					}
-					// skip non-matches
+					ismatch = conds.MatchAt(pkg, i)
 					if !ismatch {
-						continue
+						break
 					}
 					// handle row
 				}
@@ -613,20 +570,19 @@ func BenchmarkInConditionVector(B *testing.B) {
 			// add random values
 			inSlice = append(inSlice, randByteSlice(checkN, 32)...)
 
-			conds := ConditionList{
-				Condition{
-					Field: f4,
-					Mode:  FilterModeIn,
-					Value: inSlice,
-				},
-			}
-			conds.Compile(&Table{name: "test"})
+			conds := ConditionTreeNode{}
+			conds.AddAndCondition(&Condition{
+				Field: f4,
+				Mode:  FilterModeIn,
+				Value: inSlice,
+			})
+			conds.Compile()
 			B.ResetTimer()
 			B.ReportAllocs()
 			B.SetBytes(int64(n.l) * 32)
 			for b := 0; b < B.N; b++ {
 				// this is the core of a new matching loop design
-				bits := conds.MatchPack(pkg)
+				bits := conds.MatchPack(pkg, PackageHeader{})
 				for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 					// handle rows
 				}
