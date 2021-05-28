@@ -6,6 +6,7 @@
 #include "textflag.h"
 #include "constants.h"
 
+
 #define BITSET_AVX2(_FUNC) \
 	VMOVDQA		0(DI), Y0; \
 	_FUNC		0(SI), Y0, Y0; \
@@ -423,26 +424,26 @@ done:
 
 
 #define CSA(x, y, a, b, c) \
-	VPXOR	a, b, c; \
 	VPAND	a, b, x; \
-	VPXOR	c, b, y; \
-	VPAND	c, b, c; \
-	VPOR 	x, c, x;
+	VPXOR	a, b, b; \
+	VPXOR	b, c, y; \
+	VPAND	b, c, b; \
+	VPOR 	x, b, x;
 
 #define POPCOUNT(VAL) \
 	VMOVDQU		VAL, Y6; \
 	VPSRLW		$1, Y6, Y6; \
 	VPAND		Y6, Y7, Y6; \
-	VPSUBB		VAL, Y6, VAL; \
+	VPSUBB		Y6, VAL, VAL; \
 	VMOVDQU		VAL, Y6; \
 	VPSRLW		$2, Y6, Y6; \
-	VPAND		Y6, Y9, Y6; \
+	VPAND		Y6, Y8, Y6; \
 	VPAND		VAL, Y8, VAL; \
 	VPADDB		VAL, Y6, VAL; \
 	VMOVDQU		VAL, Y6; \
 	VPSRLW		$4, Y6, Y6; \
-	VPAND		Y6, Y9, Y6; \
 	VPADDB		VAL, Y6, VAL; \
+	VPAND		VAL, Y9, VAL; \
 	VPXOR		Y6, Y6, Y6; \
 	VPSADBW		VAL, Y6, VAL;
 
@@ -470,7 +471,6 @@ prep_avx2:
 	VPXOR			Y12, Y12, Y12
 	VPXOR			Y13, Y13, Y13
 	VPXOR			Y14, Y14, Y14
-	VPXOR			Y15, Y15, Y15
 
 loop_avx2:
 	VMOVDQU		0(SI), Y0
@@ -504,9 +504,9 @@ loop_avx2:
 	CSA(Y5, Y12, Y12, Y2, Y3)
 	CSA(Y0, Y13, Y13, Y4, Y5)
 	CSA(Y15, Y14, Y14, Y6, Y0)
-	VMOVDQU		Y15, Y0
-	POPCOUNT(Y0)
-	VPADDQ		Y0, Y10, Y10
+	POPCOUNT(Y15)
+	VPADDQ		Y15, Y10, Y10
+
 	LEAQ		512(SI), SI
 	SUBQ		$512, BX
 	CMPQ		BX, $512
@@ -540,8 +540,8 @@ prep_avx:
 	JBE		prep_i64
 
 loop_avx:
-	VMOVDQA  	0(SI), X0
-	VMOVDQA  	16(SI), X1
+	VMOVDQU  	0(SI), X0
+	VMOVDQU  	16(SI), X1
 	VMOVHLPS 	X0, X2, X2
 	VMOVHLPS 	X1, X3, X3
 	VMOVQ    	X0, R8
@@ -563,6 +563,7 @@ loop_avx:
 	JMP		 	loop_avx
 
 prep_i64:
+	VZEROUPPER
 	TESTQ	BX, BX
 	JLE		done
 	CMPL	BX, $8

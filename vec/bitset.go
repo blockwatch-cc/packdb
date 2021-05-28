@@ -57,14 +57,39 @@ func (s *BitSet) Resize(size int) *BitSet {
 	}
 	sz := bitFieldLen(size)
 	if s.buf == nil || cap(s.buf) < sz {
-		s.buf = make([]byte, sz)
+		buf := make([]byte, sz)
+		copy(buf, s.buf)
+		s.buf = buf
 	} else {
+		if size < s.size {
+			if len(s.buf) > sz {
+				s.buf[sz] = 0
+				for bp := 1; sz+bp < len(s.buf); bp *= 2 {
+					copy(s.buf[sz+bp:], s.buf[sz:sz+bp])
+				}
+			}
+			if sz > 0 {
+				s.buf[sz-1] &= bitmask(size)
+			}
+			s.cnt = -1
+		}
 		s.buf = s.buf[:sz]
 	}
 	s.size = size
-	s.cnt = -1
-	s.Zero()
 	return s
+}
+
+func (s *BitSet) Reset() {
+	if len(s.buf) > 0 {
+		s.buf[0] = 0
+		for bp := 1; bp < len(s.buf); bp *= 2 {
+			copy(s.buf[bp:], s.buf[:bp])
+		}
+	}
+	s.size = 0
+	s.cnt = 0
+	s.buf = s.buf[:0]
+	s.isReverse = false
 }
 
 func (s *BitSet) Close() {
@@ -230,4 +255,33 @@ func (b BitSet) Run(index int) (int, int) {
 		return start, length
 	}
 	return bitsetRun(b.buf, index, b.size)
+}
+
+func (s BitSet) Indexes(slice []int) []int {
+	cnt := s.Count()
+	if slice == nil || cap(slice) < int(cnt) {
+		slice = make([]int, cnt)
+	} else {
+		slice = slice[:cnt]
+	}
+	var j int
+	for i, l := 0, s.size-s.size%8; i < l; i += 8 {
+		b := s.buf[i>>3]
+		for l := 0; b > 0; b, l = b<<1, l+1 {
+			if b&0x80 == 0 {
+				continue
+			}
+			slice[j] = i + l
+			j++
+		}
+	}
+	for i := s.size & ^0x7; i < s.size; i++ {
+		mask := byte(1 << uint(7-i&0x7))
+		if s.buf[i>>3]&mask == 0 {
+			continue
+		}
+		slice[j] = i
+		j++
+	}
+	return slice
 }
