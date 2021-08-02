@@ -402,6 +402,10 @@ func (idx *Index) storePackHeaders(dbTx store.Tx) error {
 		return ErrNoTable
 	}
 	hb := b.Bucket(headerKey)
+	for _, k := range idx.packs.deads {
+		hb.Delete(k)
+	}
+	idx.packs.deads = idx.packs.deads[:0]
 	for i := range idx.packs.heads {
 		if !idx.packs.heads[i].dirty {
 			continue
@@ -459,11 +463,11 @@ func (idx *Index) RemoveTx(tx *Tx, pkg *Package, srcPos, srcLen int) error {
 		if pkg.IsZeroAt(idx.Field.Index, i) {
 			continue
 		}
-
-		if err := idx.tombstone.Push(IndexEntry{
+		entry := IndexEntry{
 			Key: idx.indexValueAt(idx.Field.Type, pkg, idx.Field.Index, i),
 			Id:  pk[i],
-		}); err != nil {
+		}
+		if err := idx.tombstone.Push(entry); err != nil {
 			return err
 		}
 		count++
