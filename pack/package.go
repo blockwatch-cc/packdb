@@ -801,7 +801,7 @@ func (p *Package) isValidAt(index, pos int, typ BlockType) error {
 	if index < 0 || p.nFields <= index {
 		return ErrNoField
 	}
-	if p.nValues <= pos {
+	if pos < 0 || p.nValues <= pos {
 		return ErrNoColumn
 	}
 	if p.blocks[index].Type != typ {
