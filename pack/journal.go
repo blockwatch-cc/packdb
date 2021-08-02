@@ -115,11 +115,23 @@ func (j *Journal) LoadLegacy(dbTx store.Tx, bucketName []byte) error {
 			break
 		}
 		j.deleted.Set(idx)
+		j.data.SetFieldAt(j.data.pkindex, idx, uint64(0))
 	}
 	return nil
 }
 
 func (j *Journal) StoreLegacy(dbTx store.Tx, bucketName []byte) (int, error) {
+	var idx, last int
+	for _, v := range j.tomb {
+		idx, last = j.PkIndex(v, last)
+		if idx < 0 {
+			continue
+		}
+		if last >= len(j.keys) {
+			break
+		}
+		j.data.SetFieldAt(j.data.pkindex, idx, v)
+	}
 	n, err := storePackTx(dbTx, bucketName, journalKey, j.data, defaultJournalFillLevel)
 	if err != nil {
 		return 0, err
@@ -136,6 +148,16 @@ func (j *Journal) StoreLegacy(dbTx store.Tx, bucketName []byte) (int, error) {
 		return n, err
 	}
 	n += m
+	for _, v := range j.tomb {
+		idx, last = j.PkIndex(v, last)
+		if idx < 0 {
+			continue
+		}
+		if last >= len(j.keys) {
+			break
+		}
+		j.data.SetFieldAt(j.data.pkindex, idx, uint64(0))
+	}
 	return n, nil
 }
 
@@ -587,13 +609,9 @@ func (j *Journal) PkIndex(pk uint64, last int) (int, int) {
 		return -1, len(j.keys)
 	}
 
-	idx := sort.Search(len(j.keys)-last, func(i int) bool { return j.keys[last+i].pk >= pk })
-
-	if last+idx < len(j.keys) && j.keys[last+idx].pk == pk {
-		return j.keys[last+idx].idx, last + idx
-	}
-	if last+idx == len(j.keys) {
-		return -1, len(j.keys)
+	last += sort.Search(len(j.keys)-last, func(i int) bool { return j.keys[last+i].pk >= pk })
+	if last < len(j.keys) && j.keys[last].pk == pk {
+		return j.keys[last].idx, last
 	}
 	return -1, last
 }
