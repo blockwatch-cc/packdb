@@ -982,6 +982,11 @@ func (n ConditionTreeNode) MaybeMatchPack(info PackageHeader) bool {
 		}
 	}
 
+	// no OR nodes match
+	if n.OrKind {
+		return false
+	}
+	// all AND nodes match
 	return true
 }
 
