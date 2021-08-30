@@ -407,6 +407,7 @@ func (p *Package) DumpBlocks(w io.Writer, mode DumpMode, lineNo int) (int, error
 	}
 	return lineNo, nil
 }
+
 func (p *Package) DumpData(w io.Writer, mode DumpMode, aliases []string) error {
 	names := p.names
 	if len(aliases) == p.nFields && len(aliases[0]) > 0 {
@@ -505,4 +506,36 @@ func (q Query) Dump() string {
 	fmt.Fprintln(buf, "Query:", q.Name, "=>")
 	q.Conditions.Dump(0, buf)
 	return string(buf.Bytes())
+}
+
+func (j Join) Dump() string {
+	buf := bytes.NewBuffer(nil)
+	fmt.Fprintln(buf, "Join:", j.Type.String(), "=>")
+	fmt.Fprintln(buf, "  Predicate:", j.Predicate.Left.Alias, j.Predicate.Mode.String(), j.Predicate.Right.Alias)
+	fmt.Fprintln(buf, "  Left:", j.Left.Table.Name())
+	fmt.Fprintln(buf, "  Where:")
+	j.Left.Where.Dump(0, buf)
+	fmt.Fprintln(buf, "  Fields:", strings.Join(j.Left.Fields.Names(), ","))
+	fmt.Fprintln(buf, "  AS:", strings.Join(j.Left.FieldsAs, ","))
+	fmt.Fprintln(buf, "  Limit:", j.Left.Limit)
+	fmt.Fprintln(buf, "  Right:", j.Right.Table.Name())
+	fmt.Fprintln(buf, "  Where:")
+	j.Right.Where.Dump(0, buf)
+	fmt.Fprintln(buf, "  Fields:", strings.Join(j.Right.Fields.Names(), ","))
+	fmt.Fprintln(buf, "  AS:", strings.Join(j.Right.FieldsAs, ","))
+	fmt.Fprintln(buf, "  Limit:", j.Right.Limit)
+	return buf.String()
+}
+
+func (r Result) Dump() string {
+	buf := bytes.NewBuffer(nil)
+	fmt.Fprintf(buf, "Result ------------------------------------ \n")
+	fmt.Fprintf(buf, "Rows:       %d\n", r.Rows())
+	fmt.Fprintf(buf, "Cols:       %d\n", len(r.fields))
+	fmt.Fprintf(buf, "%-2s  %-15s  %-15s  %-10s  %-4s  %s\n", "No", "Name", "Alias", "Type", "Prec", "Flags")
+	for _, v := range r.fields {
+		fmt.Fprintf(buf, "%02d  %-15s  %-15s  %-10s  %2d    %d\n",
+			v.Index, v.Name, v.Alias, v.Type, v.Precision, v.Flags)
+	}
+	return buf.String()
 }

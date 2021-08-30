@@ -362,11 +362,8 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 					Raw:   "left_join_cursor",
 				})
 			}
-			// log.Debugf("join: left table query with %d cond, cursor=%d limit=%d",
-			// 	lQ.Conditions.Len(), pkcursor, lQ.Limit)
-			// for i, c := range lQ.Conditions {
-			// 	log.Debugf("cond %d: %s", i, c.String())
-			// }
+			// log.Debugf("join: left table query with %d cond, cursor=%d limit=%d %s",
+			// 	lQ.Conditions.Len(), pkcursor, lQ.Limit, lQ.Dump())
 			lRes, err = j.Left.Table.Query(ctx, lQ)
 			if err != nil {
 				return nil, err
@@ -407,10 +404,8 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 				Fields:     j.Right.Fields.AddUnique(j.Predicate.Right),
 				Conditions: rConds,
 			}
-			// log.Debugf("join: right table query with %d cond and limit %d", rQ.Conditions.Len(), rQ.Limit)
-			// for i, c := range rQ.Conditions {
-			// 	log.Debugf("cond %d: %s", i, c.String())
-			// }
+			// log.Debugf("join: right table query with %d cond and limit %d %s",
+			// 	rQ.Conditions.Len(), rQ.Limit, rQ.Dump())
 
 			rRes, err = j.Right.Table.Query(ctx, rQ)
 			if err != nil {
@@ -433,11 +428,9 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 					Raw:   "right_join_cursor",
 				})
 			}
-			// log.Debugf("join: right table query with %d cond, cursor=%d limit=%d",
-			// 	rQ.Conditions.Len(), pkcursor, rQ.Limit)
-			// for i, c := range rQ.Conditions {
-			// 	log.Debugf("cond %d: %s", i, c.String())
-			// }
+			// log.Debugf("join: right table query with %d cond, cursor=%d limit=%d %s",
+			// 	rQ.Conditions.Len(), pkcursor, rQ.Limit, rQ.Dump())
+
 			rRes, err = j.Right.Table.Query(ctx, rQ)
 			if err != nil {
 				return nil, err
@@ -451,7 +444,7 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 
 			pkcursor, err = rRes.pkg.Uint64At(rRes.Fields().PkIndex(), rRes.Rows()-1)
 			if err != nil {
-				// log.Errorf("join: no pk column in query result %s: %v", rQ.Name, err)
+				log.Errorf("join: no pk column in query result %s: %v", rQ.Name, err)
 				return nil, err
 			}
 
@@ -478,10 +471,9 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 				Fields:     j.Left.Fields.AddUnique(j.Predicate.Left),
 				Conditions: lConds,
 			}
-			// log.Debugf("join: left table query with %d cond and limit %d", lQ.Conditions.Len(), lQ.Limit)
-			// for i, c := range lQ.Conditions {
-			// 	log.Debugf("cond %d: %s", i, c.String())
-			// }
+			// log.Debugf("join: left table query with %d cond and limit %d %s",
+			// 	lQ.Conditions.Len(), lQ.Limit, lQ.Dump())
+
 			lRes, err = j.Left.Table.Query(ctx, lQ)
 			if err != nil {
 				return nil, err
@@ -665,7 +657,7 @@ func loopJoinLeft(join Join, left, right, out *Result) error {
 
 // TODO: never match NULL values (i.e. pkg.IsZeroAt(index,pos) == true)
 func mergeJoinLeft(join Join, left, right, out *Result) error {
-	// log.Debugf("join: left join on %d/%d rows using merge", left.Rows(), right.Rows())
+	log.Debugf("join: left join on %d/%d rows using merge", left.Rows(), right.Rows())
 	var (
 		currBlockStart, currBlockEnd int
 		wasMatch                     bool
