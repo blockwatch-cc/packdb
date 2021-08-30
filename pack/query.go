@@ -116,6 +116,9 @@ func (q *Query) Compile(t *Table) error {
 		q.Fields = q.Fields.MergeUnique(t.Fields().Pk())
 	}
 	q.reqfields = q.Fields.MergeUnique(q.Conditions.Fields()...)
+	if len(q.idxFields) == 0 {
+		q.idxFields = t.fields.Indexed()
+	}
 	if err := q.Check(); err != nil {
 		q.totalTime = time.Since(q.lap)
 		return err
