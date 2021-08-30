@@ -879,6 +879,17 @@ func (n ConditionTreeNode) Fields() FieldList {
 	return fl
 }
 
+func (n ConditionTreeNode) Len() int {
+	if n.Leaf() {
+		return 1
+	}
+	l := 0
+	for _, v := range n.Children {
+		l += v.Len()
+	}
+	return l
+}
+
 func (n ConditionTreeNode) Weight() int {
 	if n.Leaf() {
 		return n.Cond.NValues()
