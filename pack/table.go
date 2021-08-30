@@ -1324,7 +1324,7 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 	return t.flushJournalTx(ctx, tx)
 }
 
-func (t Table) findBestPack(pkval uint64) (int, uint64, uint64) {
+func (t *Table) findBestPack(pkval uint64) (int, uint64, uint64) {
 	bestpack, min, max := t.packs.Best(pkval)
 
 	if t.packs.Len() == 0 || pkval-min <= max-min {
@@ -2422,13 +2422,13 @@ func (t *Table) Compact(ctx context.Context) error {
 	return tx.Commit()
 }
 
-func (t Table) partkey(id int) []byte {
+func (t *Table) partkey(id int) []byte {
 	var buf [4]byte
 	bigEndian.PutUint32(buf[:], uint32(id))
 	return buf[:]
 }
 
-func (t Table) nextPackKey() []byte {
+func (t *Table) nextPackKey() []byte {
 	switch l := t.packs.Len(); l {
 	case 0:
 		return t.partkey(0)
@@ -2438,7 +2438,7 @@ func (t Table) nextPackKey() []byte {
 	}
 }
 
-func (t Table) cachekey(key []byte) string {
+func (t *Table) cachekey(key []byte) string {
 	return t.name + "/" + hex.EncodeToString(key)
 }
 
