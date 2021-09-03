@@ -14,87 +14,165 @@ import (
 	"github.com/cespare/xxhash"
 )
 
-// DEPRECATED, only used for testcases and benchmarks
-// match a single value usually from a pack vector against the condition
-func (c Condition) Match(val interface{}) bool {
-	switch c.Mode {
-	case FilterModeEqual:
-		return c.Field.Type.Equal(val, c.Value)
-	case FilterModeNotEqual:
-		return !c.Field.Type.Equal(val, c.Value)
-	case FilterModeRange:
-		return c.Field.Type.Between(val, c.From, c.To)
-	case FilterModeIn:
-		// type check on val was already performed in compile stage
-		switch c.Field.Type {
-		case FieldTypeInt64:
-			_, ok := c.int64map[val.(int64)]
-			return ok
-		case FieldTypeUint64:
-			_, ok := c.uint64map[val.(uint64)]
-			return ok
-		}
-
-		// strings and bytes use bloom filter or hash map
-		// any negative response means val is NOT part of the set and can
-		// be rejected, any positive response may be a false positive with
-		// low probability
-		var buf []byte
-		if c.Field.Type == FieldTypeBytes {
-			buf = val.([]byte)
-		} else if c.Field.Type == FieldTypeString {
-			buf = []byte(val.(string))
-		}
-		if buf != nil && c.hashmap != nil {
-			if _, ok := c.hashmap[xxhash.Sum64(buf)]; !ok {
-				return false
-			}
-		}
-		// any other value is delegated (Note: due to false positives also
-		// byte and string conditions are checked again)
-		return c.Field.Type.In(val, c.Value) // c.Value is a slice
-	case FilterModeNotIn:
-		// type check on val was already performed in compile stage
-		switch c.Field.Type {
-		case FieldTypeInt64:
-			_, ok := c.int64map[val.(int64)]
-			return !ok
-		case FieldTypeUint64:
-			_, ok := c.uint64map[val.(uint64)]
-			return !ok
-		}
-
-		// strings and bytes use bloom filter or hash map
-		// any negative response means val is NOT part of the set and can
-		// be rejected right away, any positive response may be a false
-		// positive with low probability
-		var buf []byte
-		if c.Field.Type == FieldTypeBytes {
-			buf = val.([]byte)
-		} else if c.Field.Type == FieldTypeString {
-			buf = []byte(val.(string))
-		}
-		if buf != nil && c.hashmap != nil {
-			if _, ok := c.hashmap[xxhash.Sum64(buf)]; !ok {
-				return true
-			}
-		}
-		// any other value is delegated (Note: due to false positives also
-		// byte and string conditions are checked again)
-		return !c.Field.Type.In(val, c.Value) // c.Value is a slice
-	case FilterModeRegexp:
-		return c.Field.Type.Regexp(val, c.Value.(string)) // c.Value is regexp string
-	case FilterModeGt:
-		return c.Field.Type.Gt(val, c.Value)
-	case FilterModeGte:
-		return c.Field.Type.Gte(val, c.Value)
-	case FilterModeLt:
-		return c.Field.Type.Lt(val, c.Value)
-	case FilterModeLte:
-		return c.Field.Type.Lte(val, c.Value)
-	default:
-		return false
+// test condition tree construction methods
+var (
+	fields = FieldList{
+		{
+			Index: 0,
+			Name:  "A",
+			Type:  FieldTypeInt64,
+		},
+		{
+			Index: 1,
+			Name:  "B",
+			Type:  FieldTypeInt64,
+		},
+		{
+			Index: 2,
+			Name:  "C",
+			Type:  FieldTypeInt64,
+		},
+		{
+			Index: 3,
+			Name:  "D",
+			Type:  FieldTypeInt64,
+		},
 	}
+	conds = []*Condition{
+		{
+			Field: fields[0],
+			Mode:  FilterModeEqual,
+			Value: 1,
+		},
+		{
+			Field: fields[1],
+			Mode:  FilterModeEqual,
+			Value: 1,
+		},
+		{
+			Field: fields[2],
+			Mode:  FilterModeEqual,
+			Value: 1,
+		},
+	}
+)
+
+func checkNode(
+	t *testing.T,
+	name string,
+	node ConditionTreeNode,
+	kind bool,
+	empty, leaf, cond bool,
+	size, depth, children int) {
+
+	t.Logf("%s: %s\n", name, node.Dump())
+
+	if got, want := node.Empty(), empty; got != want {
+		t.Errorf("%s node isempty got=%t exp=%t", name, got, want)
+	}
+	if got, want := node.Cond != nil, cond; got != want {
+		t.Errorf("%s node cond exist got=%t exp=%t", name, got, want)
+	}
+	if got, want := node.Leaf(), leaf; got != want {
+		t.Errorf("%s node isleaf got=%t exp=%t", name, got, want)
+	}
+	if got, want := node.OrKind, kind; got != want {
+		t.Errorf("%s node kind got=%t exp=%t", name, got, want)
+	}
+	if got, want := node.Size(), size; got != want {
+		t.Errorf("%s node tree size got=%d exp=%d", name, got, want)
+	}
+	if got, want := node.Depth(), depth; got != want {
+		t.Errorf("%s node tree depth got=%d exp=%d", name, got, want)
+	}
+	if got, want := len(node.Children), children; got != want {
+		t.Errorf("%s node children len got=%d exp=%d", name, got, want)
+	}
+}
+
+// Test for adding single nodes one-by-one to a root node. Root invariants
+// are maintained, so the root cannot be a leaf.
+func TestConditionTreeAdd(t *testing.T) {
+	node := ConditionTreeNode{}
+	checkNode(t, "EMPTY", node, COND_AND, true, false, false, 0, 0, 0)
+
+	node.AddAndCondition(conds[0])
+	checkNode(t, "Single", node, COND_AND, false, false, false, 1, 2, 1)
+
+	node.AddAndCondition(conds[1])
+	checkNode(t, "Double", node, COND_AND, false, false, false, 2, 2, 2)
+
+	node.AddOrCondition(conds[2])
+	checkNode(t, "Triple", node, COND_AND, false, false, false, 3, 2, 3)
+}
+
+// Test for binding nested tree nodes. There is no root node invariant established
+// in this test. Its meant for building tree fragments.
+func TestConditionTreeBind(t *testing.T) {
+	table := &Table{
+		name:   "test",
+		fields: fields,
+	}
+	node := And(Equal("A", 1)).Bind(table)
+	checkNode(t, "AND(A)", node, COND_AND, false, false, false, 1, 2, 1)
+
+	node = And(Equal("A", 1), Equal("B", 1)).Bind(table)
+	checkNode(t, "AND(A,B)", node, COND_AND, false, false, false, 2, 2, 2)
+
+	node = Or(Equal("A", 1), Equal("B", 1)).Bind(table)
+	checkNode(t, "OR(A,B)", node, COND_OR, false, false, false, 2, 2, 2)
+
+	node = And(
+		Equal("A", 1),
+		Or(Equal("B", 1), Equal("C", 1)),
+	).Bind(table)
+	checkNode(t, "AND(A,OR(B,C))", node, COND_AND, false, false, false, 3, 3, 2)
+
+	node = And(
+		Or(Equal("B", 1), Equal("C", 1)),
+		Equal("A", 1),
+	).Bind(table)
+	checkNode(t, "AND(OR(B,C),A)", node, COND_AND, false, false, false, 3, 3, 2)
+	// 1st branch is an inner node
+	checkNode(t, "->OR(B,C)", node.Children[0], COND_OR, false, false, false, 2, 2, 2)
+	// 2nd branch is a leaf
+	checkNode(t, "->AND(A)", node.Children[1], COND_AND, false, true, true, 1, 1, 0)
+}
+
+// Tests tree construction and bind with root-node invariants as it happens in queries.
+func TestConditionTreeQuery(t *testing.T) {
+	table := &Table{
+		name:   "test",
+		fields: fields,
+	}
+
+	// Note: AND nodes become direct children of the root
+	q := NewQuery("test", table).And(Equal("A", 1))
+	checkNode(t, "AND(A)", q.Conditions, COND_AND, false, false, false, 1, 2, 1)
+
+	q = NewQuery("test", table).And(Equal("A", 1), Equal("B", 1))
+	checkNode(t, "AND(A,B)", q.Conditions, COND_AND, false, false, false, 2, 2, 2)
+
+	// Note: OR nodes increase tree depth, adds 1 inner OR node and its children
+	q = NewQuery("test", table).Or(Equal("A", 1), Equal("B", 1))
+	checkNode(t, "OR(A,B)", q.Conditions, COND_AND, false, false, false, 2, 3, 1)
+	checkNode(t, "OR(A,B)[0]", q.Conditions.Children[0], COND_OR, false, false, false, 2, 2, 2)
+
+	q = NewQuery("test", table).And(
+		Equal("A", 1),
+		Or(Equal("B", 1), Equal("C", 1)),
+	)
+	checkNode(t, "AND(A,OR(B,C))", q.Conditions, COND_AND, false, false, false, 3, 3, 2)
+
+	q = NewQuery("test", table).And(
+		Or(Equal("B", 1), Equal("C", 1)),
+		Equal("A", 1),
+	)
+	checkNode(t, "AND(OR(B,C),A)", q.Conditions, COND_AND, false, false, false, 3, 3, 2)
+	// 1st branch is an inner OR node
+	checkNode(t, "AND(OR(B,C),A)[0]", q.Conditions.Children[0], COND_OR, false, false, false, 2, 2, 2)
+	// 2nd branch is a leaf
+	checkNode(t, "AND(OR(B,C),A)[1]", q.Conditions.Children[1], COND_AND, false, true, true, 1, 1, 0)
 }
 
 type packBenchmarkSize struct {

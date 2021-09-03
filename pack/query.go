@@ -313,22 +313,7 @@ func (q Query) And(conds ...UnboundCondition) Query {
 	if len(conds) == 0 {
 		return q
 	}
-
-	node := ConditionTreeNode{
-		OrKind:   COND_AND,
-		Children: make([]ConditionTreeNode, 0),
-	}
-
-	for _, v := range conds {
-		node.AddNode(v.Bind(q.table))
-	}
-
-	if q.Conditions.Empty() {
-		q.Conditions.ReplaceNode(node)
-	} else {
-		q.Conditions.AddNode(node)
-	}
-
+	q.Conditions.AddNode(And(conds...).Bind(q.table))
 	return q
 }
 
@@ -336,22 +321,7 @@ func (q Query) Or(conds ...UnboundCondition) Query {
 	if len(conds) == 0 {
 		return q
 	}
-
-	node := ConditionTreeNode{
-		OrKind:   COND_OR,
-		Children: make([]ConditionTreeNode, 0),
-	}
-
-	for _, v := range conds {
-		node.AddNode(v.Bind(q.table))
-	}
-
-	if q.Conditions.Empty() {
-		q.Conditions.ReplaceNode(node)
-	} else {
-		q.Conditions.AddNode(node)
-	}
-
+	q.Conditions.AddNode(Or(conds...).Bind(q.table))
 	return q
 }
 

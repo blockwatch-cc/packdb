@@ -363,7 +363,7 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 				})
 			}
 			// log.Debugf("join: left table query with %d cond, cursor=%d limit=%d %s",
-			// 	lQ.Conditions.Len(), pkcursor, lQ.Limit, lQ.Dump())
+			// 	lQ.Conditions.Size(), pkcursor, lQ.Limit, lQ.Dump())
 			lRes, err = j.Left.Table.Query(ctx, lQ)
 			if err != nil {
 				return nil, err
@@ -405,7 +405,7 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 				Conditions: rConds,
 			}
 			// log.Debugf("join: right table query with %d cond and limit %d %s",
-			// 	rQ.Conditions.Len(), rQ.Limit, rQ.Dump())
+			// 	rQ.Conditions.Size(), rQ.Limit, rQ.Dump())
 
 			rRes, err = j.Right.Table.Query(ctx, rQ)
 			if err != nil {
@@ -429,7 +429,7 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 				})
 			}
 			// log.Debugf("join: right table query with %d cond, cursor=%d limit=%d %s",
-			// 	rQ.Conditions.Len(), pkcursor, rQ.Limit, rQ.Dump())
+			// 	rQ.Conditions.Size(), pkcursor, rQ.Limit, rQ.Dump())
 
 			rRes, err = j.Right.Table.Query(ctx, rQ)
 			if err != nil {
@@ -472,7 +472,7 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 				Conditions: lConds,
 			}
 			// log.Debugf("join: left table query with %d cond and limit %d %s",
-			// 	lQ.Conditions.Len(), lQ.Limit, lQ.Dump())
+			// 	lQ.Conditions.Size(), lQ.Limit, lQ.Dump())
 
 			lRes, err = j.Left.Table.Query(ctx, lQ)
 			if err != nil {
@@ -532,7 +532,7 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 		// POST-PROCESS
 		// ------------------------------------------------------------
 		if havePostFilter {
-			// log.Debugf("join: filtering result with %d rows against %d conds", agg.Rows(), q.Conditions.Len())
+			// log.Debugf("join: filtering result with %d rows against %d conds", agg.Rows(), q.Conditions.Size())
 			bits := q.Conditions.MatchPack(agg.pkg, PackageHeader{})
 			for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 				n := length
