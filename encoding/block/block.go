@@ -379,7 +379,7 @@ func (b *Block) MaxStoredSize() int {
 	return sz + encodedBlockHeaderSize + b.Compression.HeaderSize(sz)
 }
 
-func (b *Block) Size() int {
+func (b *Block) HeapSize() int {
 	const (
 		sliceSize  = 24
 		stringSize = 16

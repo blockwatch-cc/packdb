@@ -120,7 +120,7 @@ func (j *Journal) LoadLegacy(dbTx store.Tx, bucketName []byte) error {
 	return nil
 }
 
-func (j *Journal) StoreLegacy(dbTx store.Tx, bucketName []byte) (int, error) {
+func (j *Journal) StoreLegacy(dbTx store.Tx, bucketName []byte) (int, int, error) {
 	var idx, last int
 	for _, v := range j.tomb {
 		idx, last = j.PkIndex(v, last)
@@ -134,7 +134,7 @@ func (j *Journal) StoreLegacy(dbTx store.Tx, bucketName []byte) (int, error) {
 	}
 	n, err := storePackTx(dbTx, bucketName, journalKey, j.data, defaultJournalFillLevel)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	tomb := NewPackage()
 	tomb.Init(Tombstone{}, len(j.tomb))
@@ -145,9 +145,8 @@ func (j *Journal) StoreLegacy(dbTx store.Tx, bucketName []byte) (int, error) {
 	}
 	m, err := storePackTx(dbTx, bucketName, tombstoneKey, tomb, defaultJournalFillLevel)
 	if err != nil {
-		return n, err
+		return n, 0, err
 	}
-	n += m
 	for _, v := range j.tomb {
 		idx, last = j.PkIndex(v, last)
 		if idx < 0 {
@@ -158,7 +157,7 @@ func (j *Journal) StoreLegacy(dbTx store.Tx, bucketName []byte) (int, error) {
 		}
 		j.data.SetFieldAt(j.data.pkindex, idx, uint64(0))
 	}
-	return n, nil
+	return n, m, nil
 }
 
 func (j *Journal) Len() int {
@@ -170,7 +169,7 @@ func (j *Journal) TombLen() int {
 }
 
 func (j *Journal) HeapSize() int {
-	return j.data.Size() + len(j.keys)*16 + len(j.tomb)*8 + 82
+	return j.data.HeapSize() + len(j.keys)*16 + len(j.tomb)*8 + 82
 }
 
 func (j *Journal) ShouldFlush() bool {

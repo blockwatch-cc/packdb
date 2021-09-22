@@ -339,7 +339,7 @@ func (p *Package) DumpBlocks(w io.Writer, mode DumpMode, lineNo int) (int, error
 				head.Compression,
 				util.PrettyInt(sz),
 				util.PrettyInt(v.MaxStoredSize()),
-				util.PrettyInt(v.Size()),
+				util.PrettyInt(v.HeapSize()),
 				fi,
 			)
 			lineNo++
@@ -376,7 +376,7 @@ func (p *Package) DumpBlocks(w io.Writer, mode DumpMode, lineNo int) (int, error
 			cols[8] = head.Flags
 			cols[9] = head.Compression.String()
 			cols[10] = sz
-			cols[11] = v.Size()
+			cols[11] = v.HeapSize()
 			cols[12] = v.MaxStoredSize()
 			cols[13] = fi
 			if !enc.HeaderWritten() {

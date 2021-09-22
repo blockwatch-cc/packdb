@@ -1238,10 +1238,10 @@ func (p *Package) Release() {
 	p.stripped = false
 }
 
-func (p *Package) Size() int {
+func (p *Package) HeapSize() int {
 	var sz int
 	for _, v := range p.blocks {
-		sz += v.Size()
+		sz += v.HeapSize()
 	}
 	return sz
 }

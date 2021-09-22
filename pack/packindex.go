@@ -37,6 +37,11 @@ func (p *Package) Header() PackageHeader {
 	return h
 }
 
+func (h PackageHeader) HeapSize() int {
+	// assume 8 bytes behind each min/max interface
+	return 48 + 24 + len(h.BlockHeaders)*64 + 1
+}
+
 func (h PackageHeader) MarshalBinary() ([]byte, error) {
 	buf := &bytes.Buffer{}
 	if err := h.Encode(buf); err != nil {
@@ -191,6 +196,26 @@ func NewPackIndex(heads PackageHeaderList, pkidx int) *PackIndex {
 
 func (l *PackIndex) Len() int {
 	return len(l.heads)
+}
+
+func (l *PackIndex) HeapSize() int {
+	sz := 5*24 + 8
+	sz += len(l.minpks) * 8
+	sz += len(l.maxpks) * 8
+	sz += len(l.deads)
+	sz += len(l.pairs) * 16
+	for i := range l.heads {
+		sz += l.heads[i].HeapSize()
+	}
+	return sz
+}
+
+func (l *PackIndex) TableSize() int {
+	var sz int
+	for i := range l.heads {
+		sz += l.heads[i].PackSize
+	}
+	return sz
 }
 
 func (l *PackIndex) Sort() {
