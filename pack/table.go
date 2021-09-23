@@ -218,10 +218,12 @@ func (d *DB) CreateTable(name string, fields FieldList, opts Options) (*Table, e
 		if err := t.journal.InitFields(fields); err != nil {
 			return err
 		}
-		_, _, err = t.journal.StoreLegacy(dbTx, t.metakey)
+		jsz, tsz, err := t.journal.StoreLegacy(dbTx, t.metakey)
 		if err != nil {
 			return err
 		}
+		t.stats.JournalDiskSize = int64(jsz)
+		t.stats.TombstoneDiskSize = int64(tsz)
 		return nil
 	})
 	if err != nil {
@@ -994,8 +996,11 @@ func (t *Table) Close() error {
 		t.meta.dirty = false
 	}
 
-	if _, _, err := t.journal.StoreLegacy(tx.tx, t.metakey); err != nil {
+	if jsz, tsz, err := t.journal.StoreLegacy(tx.tx, t.metakey); err != nil {
 		return err
+	} else {
+		t.stats.JournalDiskSize = int64(jsz)
+		t.stats.TombstoneDiskSize = int64(tsz)
 	}
 
 	if err := t.storePackHeaders(tx.tx); err != nil {
@@ -1056,6 +1061,8 @@ func (t *Table) flushJournalTx(ctx context.Context, tx *Tx) error {
 	atomic.AddInt64(&t.stats.TombstoneTuplesFlushed, int64(nTomb))
 	atomic.AddInt64(&t.stats.TombstonePacksStored, 1)
 	atomic.AddInt64(&t.stats.TombstoneBytesWritten, int64(nTombBytes))
+	atomic.StoreInt64(&t.stats.JournalDiskSize, int64(nJournalBytes))
+	atomic.StoreInt64(&t.stats.TombstoneDiskSize, int64(nTombBytes))
 	return nil
 }
 
