@@ -93,21 +93,22 @@ func (o Options) JournalSize() int {
 	return 1 << uint(o.JournalSizeLog2)
 }
 
-func (o *Options) MergeDefaults() {
-	o.CacheSize = util.NonZero(o.CacheSize, DefaultOptions.CacheSize)
-	o.PackSizeLog2 = util.NonZero(o.PackSizeLog2, DefaultOptions.PackSizeLog2)
-	o.JournalSizeLog2 = util.NonZero(o.JournalSizeLog2, DefaultOptions.JournalSizeLog2)
-	o.FillLevel = util.NonZero(o.FillLevel, DefaultOptions.FillLevel)
+func (o Options) Merge(o2 Options) Options {
+	o.PackSizeLog2 = util.NonZero(o2.PackSizeLog2, o.PackSizeLog2)
+	o.JournalSizeLog2 = util.NonZero(o2.JournalSizeLog2, o.JournalSizeLog2)
+	o.FillLevel = util.NonZero(o2.FillLevel, o.FillLevel)
+	o.CacheSize = o2.CacheSize
+	return o
 }
 
 func (o Options) Check() error {
-	if o.PackSizeLog2 < 10 || o.PackSizeLog2 > 22 {
-		return fmt.Errorf("PackSizeLog2 %d out of range [10, 22]", o.PackSizeLog2)
+	if o.PackSizeLog2 < 12 || o.PackSizeLog2 > 22 {
+		return fmt.Errorf("PackSizeLog2 %d out of range [12, 22]", o.PackSizeLog2)
 	}
-	if o.JournalSizeLog2 < 10 || o.JournalSizeLog2 > 22 {
-		return fmt.Errorf("JournalSizeLog2 %d out of range [10, 22]", o.JournalSizeLog2)
+	if o.JournalSizeLog2 < 12 || o.JournalSizeLog2 > 22 {
+		return fmt.Errorf("JournalSizeLog2 %d out of range [12, 22]", o.JournalSizeLog2)
 	}
-	if o.CacheSize > 64*1024 {
+	if o.CacheSize < 0 || o.CacheSize > 64*1024 {
 		return fmt.Errorf("CacheSize %d out of range [0, 64k]", o.CacheSize)
 	}
 	if o.FillLevel < 10 || o.FillLevel > 100 {
@@ -141,10 +142,12 @@ type Table struct {
 }
 
 func (d *DB) CreateTable(name string, fields FieldList, opts Options) (*Table, error) {
-	opts.MergeDefaults()
+	opts = DefaultOptions.Merge(opts)
 	if err := opts.Check(); err != nil {
 		return nil, err
 	}
+	maxPackSize := opts.PackSize()
+	maxJournalSize := opts.JournalSize()
 	t := &Table{
 		name:   name,
 		opts:   opts,
@@ -158,10 +161,12 @@ func (d *DB) CreateTable(name string, fields FieldList, opts Options) (*Table, e
 		key:     []byte(name),
 		metakey: []byte(name + "_meta"),
 		pkPool: &sync.Pool{
-			New: func() interface{} { return make([]uint64, 0) },
+			New: func() interface{} { return make([]uint64, 0, maxPackSize) },
 		},
 	}
 	t.stats.TableName = name
+	t.stats.JournalTuplesThreshold = int64(maxJournalSize)
+	t.stats.TombstoneTuplesThreshold = int64(maxJournalSize)
 	t.packPool = &sync.Pool{
 		New: t.makePackage,
 	}
@@ -214,7 +219,7 @@ func (d *DB) CreateTable(name string, fields FieldList, opts Options) (*Table, e
 		if err != nil {
 			return err
 		}
-		t.journal = NewJournal(0, t.opts.JournalSize(), t.name)
+		t.journal = NewJournal(0, maxJournalSize, t.name)
 		if err := t.journal.InitFields(fields); err != nil {
 			return err
 		}
@@ -234,6 +239,7 @@ func (d *DB) CreateTable(name string, fields FieldList, opts Options) (*Table, e
 		if err != nil {
 			return nil, err
 		}
+		t.stats.PackCacheCapacity = int64(t.opts.CacheSize)
 	} else {
 		t.cache = cache.NewNoCache()
 	}
@@ -323,6 +329,16 @@ func (d *DB) Table(name string, opts ...Options) (*Table, error) {
 		if err != nil {
 			return err
 		}
+		if len(opts) > 0 {
+			if opts[0].PackSizeLog2 > 0 && t.opts.PackSizeLog2 != opts[0].PackSizeLog2 {
+				return fmt.Errorf("pack: %s pack size change not allowed", name)
+			}
+			t.opts = t.opts.Merge(opts[0])
+		}
+		maxJournalSize := t.opts.JournalSize()
+		// maxPackSize := t.opts.PackSize()
+		t.stats.JournalTuplesThreshold = int64(maxJournalSize)
+		t.stats.TombstoneTuplesThreshold = int64(maxJournalSize)
 		buf = b.Get(fieldsKey)
 		if buf == nil {
 			return fmt.Errorf("pack: missing fields for table %s", name)
@@ -347,7 +363,7 @@ func (d *DB) Table(name string, opts ...Options) (*Table, error) {
 		if err != nil {
 			return fmt.Errorf("pack: cannot read metadata for table %s: %v", name, err)
 		}
-		t.journal = NewJournal(t.meta.Sequence, t.opts.JournalSize(), t.name)
+		t.journal = NewJournal(t.meta.Sequence, maxJournalSize, t.name)
 		t.journal.InitFields(t.fields)
 		err = t.journal.LoadLegacy(dbTx, t.metakey)
 		if err != nil {
@@ -359,18 +375,12 @@ func (d *DB) Table(name string, opts ...Options) (*Table, error) {
 	if err != nil {
 		return nil, err
 	}
-	cacheSize := t.opts.CacheSize
-	if len(opts) > 0 {
-		cacheSize = opts[0].CacheSize
-		if opts[0].JournalSizeLog2 > 0 {
-			t.opts.JournalSizeLog2 = opts[0].JournalSizeLog2
-		}
-	}
-	if cacheSize > 0 {
-		t.cache, err = lru.New2QWithEvict(int(cacheSize), t.onEvictedPackage)
+	if t.opts.CacheSize > 0 {
+		t.cache, err = lru.New2QWithEvict(int(t.opts.CacheSize), t.onEvictedPackage)
 		if err != nil {
 			return nil, err
 		}
+		t.stats.PackCacheCapacity = int64(t.opts.CacheSize)
 	} else {
 		t.cache = cache.NewNoCache()
 	}
@@ -438,13 +448,16 @@ func (t *Table) loadPackHeaders(dbTx store.Tx) error {
 			log.Errorf("pack: header decode for table %s pack %x: %v", t.name, c.Key(), err)
 		} else {
 			t.packs = NewPackIndex(heads, t.fields.PkIndex())
+			atomic.StoreInt64(&t.stats.PacksCount, int64(t.packs.Len()))
+			atomic.StoreInt64(&t.stats.MetaSize, int64(t.packs.HeapSize()))
+			atomic.StoreInt64(&t.stats.PacksSize, int64(t.packs.TableSize()))
 			log.Debugf("pack: %s table loaded %d package headers", t.name, t.packs.Len())
 			return nil
 		}
 	}
 	log.Infof("pack: scanning headers for table %s...", t.name)
 	c := dbTx.Bucket(t.key).Cursor()
-	pkg := t.journal.DataPack().Clone(false, 0)
+	pkg := t.journal.DataPack().Clone(false, t.opts.PackSize())
 	for ok := c.First(); ok; ok = c.Next() {
 		ph, err := pkg.UnmarshalHeader(c.Value())
 		if err != nil {
@@ -455,8 +468,12 @@ func (t *Table) loadPackHeaders(dbTx store.Tx) error {
 		copy(ph.Key, c.Key())
 		heads = append(heads, ph)
 		atomic.AddInt64(&t.stats.MetaBytesRead, int64(len(c.Value())))
+		pkg.Clear()
 	}
 	t.packs = NewPackIndex(heads, t.fields.PkIndex())
+	atomic.StoreInt64(&t.stats.PacksCount, int64(t.packs.Len()))
+	atomic.StoreInt64(&t.stats.MetaSize, int64(t.packs.HeapSize()))
+	atomic.StoreInt64(&t.stats.PacksSize, int64(t.packs.TableSize()))
 	log.Debugf("pack: %s table scanned %d package headers", t.name, t.packs.Len())
 	return nil
 }
@@ -559,6 +576,8 @@ func (t *Table) PurgeCache() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.cache.Purge()
+	atomic.StoreInt64(&t.stats.PackCacheCount, 0)
+	atomic.StoreInt64(&t.stats.PackCacheSize, 0)
 	for _, idx := range t.indexes {
 		idx.PurgeCache()
 	}
@@ -653,6 +672,7 @@ func (t *Table) insertJournal(val interface{}) error {
 	t.meta.Rows += int64(count)
 	t.meta.dirty = true
 	atomic.AddInt64(&t.stats.InsertedTuples, int64(count))
+	atomic.StoreInt64(&t.stats.TupleCount, t.meta.Rows)
 	return nil
 }
 
@@ -768,6 +788,7 @@ func (t *Table) appendPackIntoJournal(ctx context.Context, pkg *Package, pos, n 
 	t.meta.Rows += int64(count)
 	t.meta.dirty = true
 	atomic.AddInt64(&t.stats.InsertedTuples, int64(count))
+	atomic.StoreInt64(&t.stats.TupleCount, t.meta.Rows)
 	return nil
 
 }
@@ -966,9 +987,10 @@ func (t *Table) deleteJournal(ids []uint64) error {
 
 	// Note: we don't check if ids actually exist, so row counter may be off
 	// until journal/tombstone are flushed
-	atomic.AddInt64(&t.stats.DeletedTuples, int64(count))
 	t.meta.Rows -= int64(count)
 	t.meta.dirty = true
+	atomic.AddInt64(&t.stats.DeletedTuples, int64(count))
+	atomic.StoreInt64(&t.stats.TupleCount, t.meta.Rows)
 	return nil
 }
 
@@ -1013,7 +1035,11 @@ func (t *Table) Close() error {
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	t.journal.Close()
+	return nil
 }
 
 func (t *Table) FlushJournal(ctx context.Context) error {
@@ -1175,7 +1201,7 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 
 		if pkg == nil {
 			if nextpack < t.packs.Len() {
-				pkg, err = t.loadPack(tx, t.packs.heads[nextpack].Key, true, nil)
+				pkg, err = t.loadWritablePack(tx, t.packs.heads[nextpack].Key)
 				if err != nil && err != ErrPackNotFound {
 					return err
 				}
@@ -1355,6 +1381,7 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 	if tlen > nDel {
 		t.meta.Rows += int64(tlen - nDel)
 		t.meta.dirty = true
+		atomic.StoreInt64(&t.stats.TupleCount, t.meta.Rows)
 	}
 
 	if t.meta.dirty {
@@ -1495,7 +1522,7 @@ func (t *Table) LookupTx(ctx context.Context, tx *Tx, ids []uint64) (*Result, er
 			return nil, ctx.Err()
 		}
 
-		pkg, err := t.loadPack(tx, t.packs.heads[nextpack].Key, true, q.reqfields)
+		pkg, err := t.loadSharedPack(tx, t.packs.heads[nextpack].Key, true, q.reqfields)
 		if err != nil {
 			res.Close()
 			return nil, err
@@ -1596,7 +1623,7 @@ func (t *Table) QueryTx(ctx context.Context, tx *Tx, q Query) (*Result, error) {
 				return nil, ctx.Err()
 			}
 
-			pkg, err := t.loadPack(tx, t.packs.heads[p].Key, !q.NoCache, q.reqfields)
+			pkg, err := t.loadSharedPack(tx, t.packs.heads[p].Key, !q.NoCache, q.reqfields)
 			if err != nil {
 				res.Close()
 				return nil, err
@@ -1753,7 +1780,7 @@ func (t *Table) QueryTxDesc(ctx context.Context, tx *Tx, q Query) (*Result, erro
 				return nil, ctx.Err()
 			}
 
-			pkg, err := t.loadPack(tx, t.packs.heads[p].Key, !q.NoCache, q.reqfields)
+			pkg, err := t.loadSharedPack(tx, t.packs.heads[p].Key, !q.NoCache, q.reqfields)
 			if err != nil {
 				res.Close()
 				return nil, err
@@ -1862,7 +1889,7 @@ func (t *Table) CountTx(ctx context.Context, tx *Tx, q Query) (int64, error) {
 				return int64(q.rowsMatched), ctx.Err()
 			}
 
-			pkg, err := t.loadPack(tx, t.packs.heads[p].Key, !q.NoCache, q.reqfields)
+			pkg, err := t.loadSharedPack(tx, t.packs.heads[p].Key, !q.NoCache, q.reqfields)
 			if err != nil {
 				return 0, err
 			}
@@ -1969,7 +1996,7 @@ func (t *Table) StreamTx(ctx context.Context, tx *Tx, q Query, fn func(r Row) er
 				return ctx.Err()
 			}
 
-			pkg, err := t.loadPack(tx, t.packs.heads[p].Key, !q.NoCache, q.reqfields)
+			pkg, err := t.loadSharedPack(tx, t.packs.heads[p].Key, !q.NoCache, q.reqfields)
 			if err != nil {
 				return err
 			}
@@ -2105,67 +2132,69 @@ func (t *Table) StreamTxDesc(ctx context.Context, tx *Tx, q Query, fn func(r Row
 	}
 	q.journalTime += time.Since(q.lap)
 
-	if !q.IsEmptyMatch() {
-		q.lap = time.Now()
-	packloop:
-		for _, p := range q.MakePackSchedule(true) {
-			if util.InterruptRequested(ctx) {
-				return ctx.Err()
-			}
+	if q.IsEmptyMatch() {
+		return nil
+	}
 
-			pkg, err := t.loadPack(tx, t.packs.heads[p].Key, !q.NoCache, q.reqfields)
-			if err != nil {
-				return err
-			}
-			q.packsScanned++
+	q.lap = time.Now()
+packloop:
+	for _, p := range q.MakePackSchedule(true) {
+		if util.InterruptRequested(ctx) {
+			return ctx.Err()
+		}
 
-			bits := q.Conditions.MatchPack(pkg, t.packs.heads[p]).Reverse()
-			for idx, length := bits.Run(bits.Size() - 1); idx >= 0; idx, length = bits.Run(idx - length) {
-				for i := idx; i > idx-length; i-- {
-					pkid, err := pkg.Uint64At(pkg.pkindex, i)
-					if err != nil {
+		pkg, err := t.loadSharedPack(tx, t.packs.heads[p].Key, !q.NoCache, q.reqfields)
+		if err != nil {
+			return err
+		}
+		q.packsScanned++
+
+		bits := q.Conditions.MatchPack(pkg, t.packs.heads[p]).Reverse()
+		for idx, length := bits.Run(bits.Size() - 1); idx >= 0; idx, length = bits.Run(idx - length) {
+			for i := idx; i > idx-length; i-- {
+				pkid, err := pkg.Uint64At(pkg.pkindex, i)
+				if err != nil {
+					continue
+				}
+
+				if ok, _ := t.journal.IsDeleted(pkid, 0); ok {
+					continue
+				}
+
+				res.pkg = pkg
+				index := i
+
+				if j, _ := t.journal.PkIndex(pkid, 0); j >= 0 {
+					if !jbits.IsSet(j) {
 						continue
 					}
+					res.pkg = t.journal.DataPack()
+					index = j
+					jbits.Clear(j)
+				}
 
-					if ok, _ := t.journal.IsDeleted(pkid, 0); ok {
-						continue
-					}
+				if q.Offset > 0 {
+					q.Offset--
+					continue
+				}
 
-					res.pkg = pkg
-					index := i
+				if err := fn(Row{res: &res, n: index}); err != nil {
+					bits.Close()
+					return err
+				}
+				res.pkg = nil
+				q.rowsMatched++
 
-					if j, _ := t.journal.PkIndex(pkid, 0); j >= 0 {
-						if !jbits.IsSet(j) {
-							continue
-						}
-						res.pkg = t.journal.DataPack()
-						index = j
-						jbits.Clear(j)
-					}
-
-					if q.Offset > 0 {
-						q.Offset--
-						continue
-					}
-
-					if err := fn(Row{res: &res, n: index}); err != nil {
-						bits.Close()
-						return err
-					}
-					res.pkg = nil
-					q.rowsMatched++
-
-					if q.Limit > 0 && q.rowsMatched >= q.Limit {
-						bits.Close()
-						break packloop
-					}
+				if q.Limit > 0 && q.rowsMatched >= q.Limit {
+					bits.Close()
+					break packloop
 				}
 			}
-			bits.Close()
 		}
-		q.scanTime = time.Since(q.lap)
-		q.lap = time.Now()
+		bits.Close()
 	}
+	q.scanTime = time.Since(q.lap)
+	q.lap = time.Now()
 
 	return nil
 }
@@ -2264,7 +2293,7 @@ func (t *Table) StreamLookupTx(ctx context.Context, tx *Tx, ids []uint64, fn fun
 			return ctx.Err()
 		}
 
-		pkg, err := t.loadPack(tx, t.packs.heads[nextpack].Key, true, q.reqfields)
+		pkg, err := t.loadSharedPack(tx, t.packs.heads[nextpack].Key, true, q.reqfields)
 		if err != nil {
 			return err
 		}
@@ -2366,7 +2395,7 @@ func (t *Table) Compact(ctx context.Context) error {
 					continue
 				}
 
-				dstPack, err = t.loadPack(tx, dstKey, false, nil)
+				dstPack, err = t.loadWritablePack(tx, dstKey)
 				if err != nil {
 					return err
 				}
@@ -2402,7 +2431,7 @@ func (t *Table) Compact(ctx context.Context) error {
 			}
 
 			ph := t.packs.heads[srcIndex]
-			srcPack, err = t.loadPack(tx, ph.Key, false, nil)
+			srcPack, err = t.loadWritablePack(tx, ph.Key)
 			if err != nil {
 				return err
 			}
@@ -2496,7 +2525,7 @@ func (t *Table) cachekey(key []byte) string {
 	return t.name + "/" + hex.EncodeToString(key)
 }
 
-func (t *Table) loadPack(tx *Tx, key []byte, touch bool, fields FieldList) (*Package, error) {
+func (t *Table) loadSharedPack(tx *Tx, key []byte, touch bool, fields FieldList) (*Package, error) {
 	stripped := len(fields) > 0 && len(fields) < len(t.Fields())
 	cachefn := t.cache.Peek
 	if touch {
@@ -2516,9 +2545,7 @@ func (t *Table) loadPack(tx *Tx, key []byte, touch bool, fields FieldList) (*Pac
 	}
 
 	atomic.AddInt64(&t.stats.PackCacheMisses, 1)
-	var (
-		err error
-	)
+	var err error
 	pkg := t.packPool.Get().(*Package)
 	if stripped {
 		pkg = pkg.KeepFields(fields)
@@ -2539,53 +2566,85 @@ func (t *Table) loadPack(tx *Tx, key []byte, touch bool, fields FieldList) (*Pac
 			atomic.AddInt64(&t.stats.PackCacheUpdates, 1)
 		} else {
 			atomic.AddInt64(&t.stats.PackCacheInserts, 1)
+			atomic.AddInt64(&t.stats.PackCacheCount, 1)
+			atomic.AddInt64(&t.stats.PackCacheSize, int64(pkg.HeapSize()))
 		}
 	}
 	return pkg, nil
 }
 
+func (t *Table) loadWritablePack(tx *Tx, key []byte) (*Package, error) {
+	if cached, ok := t.cache.Get(t.cachekey(key)); ok {
+		atomic.AddInt64(&t.stats.PackCacheHits, 1)
+		pkg := cached.(*Package)
+		clone := pkg.Clone(true, t.opts.PackSize())
+		clone.SetKey(pkg.key)
+		clone.cached = false
+		return clone, nil
+	}
+
+	atomic.AddInt64(&t.stats.PackCacheMisses, 1)
+	pkg, err := tx.loadPack(t.key, key, t.packPool.Get().(*Package))
+	if err != nil {
+		return nil, err
+	}
+	pkg.SetKey(key)
+	pkg.tinfo = t.journal.data.tinfo
+	pkg.pkindex = t.fields.PkIndex()
+	atomic.AddInt64(&t.stats.PacksLoaded, 1)
+	atomic.AddInt64(&t.stats.PacksBytesRead, int64(pkg.packedsize))
+	return pkg, nil
+}
+
 func (t *Table) storePack(tx *Tx, pkg *Package) (int, error) {
 	key := pkg.Key()
-	cachekey := t.cachekey(key)
-	if len(key) == 0 {
-		log.Errorf("pack: %s table store called with empty pack key", t.name)
-	}
+
+	defer func() {
+		// remove from cache, returns back to pool
+		cachekey := t.cachekey(key)
+		t.cache.Remove(cachekey)
+
+		// also remove all stripped packs from cache
+		cachekey += "#"
+		for _, v := range t.cache.Keys() {
+			if strings.HasPrefix(v.(string), cachekey) {
+				t.cache.Remove(v)
+			}
+		}
+	}()
+
 	if pkg.Len() > 0 {
 		n, err := tx.storePack(t.key, key, pkg, t.opts.FillLevel)
 		if err != nil {
 			return 0, err
 		}
-		t.packs.AddOrUpdate(pkg.Header())
+		head := pkg.Header()
+		if err = head.UpdateStats(pkg); err != nil {
+			return 0, err
+		}
+
+		// update statistics
+		t.packs.AddOrUpdate(head)
 		atomic.AddInt64(&t.stats.PacksStored, 1)
 		atomic.AddInt64(&t.stats.PacksBytesWritten, int64(n))
-		if pkg.cached {
-			inserted, _ := t.cache.ContainsOrAdd(cachekey, pkg)
-			if inserted {
-				atomic.AddInt64(&t.stats.PackCacheInserts, 1)
-			} else {
-				atomic.AddInt64(&t.stats.PackCacheUpdates, 1)
-			}
-		}
-		prefix := cachekey + "#"
-		for _, v := range t.cache.Keys() {
-			if strings.HasPrefix(v.(string), prefix) {
-				t.cache.Remove(v)
-			}
-		}
+		atomic.StoreInt64(&t.stats.PacksCount, int64(t.packs.Len()))
+		atomic.StoreInt64(&t.stats.MetaSize, int64(t.packs.HeapSize()))
+		atomic.StoreInt64(&t.stats.PacksSize, int64(t.packs.TableSize()))
+
 		return n, nil
-	}
-	t.packs.Remove(pkg.Header())
-	if err := tx.deletePack(t.key, key); err != nil {
-		return 0, err
-	}
-	t.cache.Remove(cachekey)
-	prefix := cachekey + "#"
-	for _, v := range t.cache.Keys() {
-		if strings.HasPrefix(v.(string), prefix) {
-			t.cache.Remove(v)
+
+	} else {
+		t.packs.RemoveKey(key)
+		if err := tx.deletePack(t.key, key); err != nil {
+			return 0, err
 		}
+
+		atomic.StoreInt64(&t.stats.PacksCount, int64(t.packs.Len()))
+		atomic.StoreInt64(&t.stats.MetaSize, int64(t.packs.HeapSize()))
+		atomic.StoreInt64(&t.stats.PacksSize, int64(t.packs.TableSize()))
+
+		return 0, nil
 	}
-	return 0, nil
 }
 
 func (t *Table) splitPack(tx *Tx, pkg *Package) (int, error) {
@@ -2598,7 +2657,7 @@ func (t *Table) splitPack(tx *Tx, pkg *Package) (int, error) {
 	if err := pkg.Delete(half, pkg.Len()-half); err != nil {
 		return 0, err
 	}
-	_, err := t.storePack(tx, pkg)
+	m, err := t.storePack(tx, pkg)
 	if err != nil {
 		return 0, err
 	}
@@ -2608,7 +2667,7 @@ func (t *Table) splitPack(tx *Tx, pkg *Package) (int, error) {
 		return 0, err
 	}
 	t.recyclePackage(newpkg)
-	return n, nil
+	return n + m, nil
 }
 
 func (t *Table) makePackage() interface{} {

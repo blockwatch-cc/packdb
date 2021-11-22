@@ -99,7 +99,7 @@ func (t *Table) DumpPack(w io.Writer, i int, mode DumpMode) error {
 		return err
 	}
 	defer tx.Rollback()
-	pkg, err := t.loadPack(tx, t.packs.heads[i].Key, false, nil)
+	pkg, err := t.loadSharedPack(tx, t.packs.heads[i].Key, false, nil)
 	if err != nil {
 		return err
 	}
@@ -118,7 +118,7 @@ func (t *Table) DumpIndexPack(w io.Writer, i, p int, mode DumpMode) error {
 		return err
 	}
 	defer tx.Rollback()
-	pkg, err := t.indexes[i].loadPack(tx, t.indexes[i].packs.heads[p].Key, false)
+	pkg, err := t.indexes[i].loadSharedPack(tx, t.indexes[i].packs.heads[p].Key, false)
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func (t *Table) DumpPackBlocks(w io.Writer, mode DumpMode) error {
 	}
 	lineNo := 1
 	for i := 0; i < t.packs.Len(); i++ {
-		pkg, err := t.loadPack(tx, t.packs.heads[i].Key, false, nil)
+		pkg, err := t.loadSharedPack(tx, t.packs.heads[i].Key, false, nil)
 		if err != nil {
 			return err
 		}
@@ -325,7 +325,7 @@ func (p *Package) DumpBlocks(w io.Writer, mode DumpMode, lineNo int) (int, error
 			} else {
 				sz = p.rawsize - p.offsets[i]
 			}
-			head := v.CloneHeader()
+			head := v.MakeHeader()
 			_, err := fmt.Fprintf(w, "%-5d %-10s %-7d %-10s %-7d %-33s %-33s %-4d %-5d %-6s %-10s %-12s %-10s %-10s\n",
 				lineNo,
 				key,
@@ -364,7 +364,7 @@ func (p *Package) DumpBlocks(w io.Writer, mode DumpMode, lineNo int) (int, error
 			} else {
 				sz = p.rawsize - p.offsets[i]
 			}
-			head := v.CloneHeader()
+			head := v.MakeHeader()
 			cols[0] = key
 			cols[1] = i
 			cols[2] = p.names[i]
