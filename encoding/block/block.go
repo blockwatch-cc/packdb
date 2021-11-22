@@ -20,6 +20,7 @@ type BlockFlags byte
 const (
 	BlockFlagConvert BlockFlags = 1 << iota
 	BlockFlagCompress
+	BlockFlagBloom
 )
 
 type Compression byte

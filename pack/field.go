@@ -26,7 +26,8 @@ const (
 	FlagConvert
 	FlagCompressSnappy
 	FlagCompressLZ4
-	FlagMode = FlagPrimary | FlagIndexed | FlagConvert | FlagCompressSnappy | FlagCompressLZ4
+	FlagBloom
+	FlagMode = FlagPrimary | FlagIndexed | FlagConvert | FlagCompressSnappy | FlagCompressLZ4 | FlagBloom
 )
 
 func (f FieldFlags) Compression() block.Compression {
@@ -35,6 +36,13 @@ func (f FieldFlags) Compression() block.Compression {
 	}
 	if f&FlagCompressLZ4 > 0 {
 		return block.LZ4Compression
+	}
+	return 0
+}
+
+func (f FieldFlags) BlockFlags() block.BlockFlags {
+	if f&FlagBloom > 0 {
+		return block.BlockFlagBloom
 	}
 	return 0
 }

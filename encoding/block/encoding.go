@@ -361,7 +361,7 @@ func unpackBlock(block []byte, typ BlockType) ([]byte, bool, error) {
 }
 
 func readBlockType(block []byte) (BlockType, error) {
-	blockType := BlockType(block[0] & 0x1f)
+	blockType := BlockType(block[0] & blockTypeMask)
 	switch blockType {
 	case BlockTime, BlockFloat, BlockInteger, BlockUnsigned, BlockBool, BlockString, BlockBytes:
 		return blockType, nil
@@ -382,7 +382,7 @@ func ensureBlockType(block []byte, typ BlockType) error {
 }
 
 func readBlockCompression(block []byte) (Compression, error) {
-	blockCompression := Compression((block[0] >> 5) & 0x3)
+	blockCompression := Compression((block[0] >> 5) & blockCompressionMask)
 	switch blockCompression {
 	case NoCompression, LZ4Compression, SnappyCompression:
 		return blockCompression, nil
@@ -392,9 +392,9 @@ func readBlockCompression(block []byte) (Compression, error) {
 }
 
 func readBlockPrecision(block []byte) int {
-	return int(block[0]) & 0xf
+	return int(block[0] & blockPrecisionMask)
 }
 
 func readBlockFlags(block []byte) BlockFlags {
-	return BlockFlags((block[0] >> 4) & 0xf)
+	return BlockFlags((block[0] >> 4) & blockFlagMask)
 }

@@ -181,6 +181,19 @@ func structFieldInfo(typ reflect.Type, f *reflect.StructField) (*fieldInfo, erro
 					}
 					finfo.precision = prec
 				}
+			case "bloom":
+				finfo.flags |= FlagBloom
+				finfo.precision = 1
+				if len(ff) > 1 {
+					factor, err := strconv.Atoi(ff[1])
+					if err != nil {
+						return nil, fmt.Errorf("pack: invalid bloom filter factor %s on field '%s': %v", ff[1], tag, err)
+					}
+					if factor < 1 || factor > 4 {
+						return nil, fmt.Errorf("pack: out of bound bloom factor %d on field '%s', should be [1..4]", factor, tag)
+					}
+					finfo.precision = factor
+				}
 			}
 		}
 	}

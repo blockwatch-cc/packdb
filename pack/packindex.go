@@ -30,9 +30,10 @@ func (p *Package) Header() PackageHeader {
 		NValues:      p.nValues,
 		PackSize:     p.packedsize,
 		BlockHeaders: make(block.BlockHeaderList, 0, p.nFields),
+		dirty:        true,
 	}
 	for _, v := range p.blocks {
-		h.BlockHeaders = append(h.BlockHeaders, v.CloneHeader())
+		h.BlockHeaders = append(h.BlockHeaders, v.MakeHeader())
 	}
 	return h
 }
@@ -40,6 +41,24 @@ func (p *Package) Header() PackageHeader {
 func (h PackageHeader) HeapSize() int {
 	// assume 8 bytes behind each min/max interface
 	return 48 + 24 + len(h.BlockHeaders)*64 + 1
+}
+
+func (h *PackageHeader) UpdateStats(pkg *Package) error {
+	if pkg.IsJournal() || pkg.Len() <= 2 {
+		return nil
+	}
+	for i := range h.BlockHeaders {
+		if !h.BlockHeaders[i].IsDirty() {
+			continue
+		}
+		h.BlockHeaders[i].ResetDirty()
+		if h.BlockHeaders[i].Flags&block.BlockFlagBloom == 0 {
+			continue
+		}
+		h.BlockHeaders[i].BuildBloomFilter(pkg.blocks[i])
+	}
+	h.dirty = true
+	return nil
 }
 
 func (h PackageHeader) MarshalBinary() ([]byte, error) {
@@ -198,6 +217,14 @@ func (l *PackIndex) Len() int {
 	return len(l.heads)
 }
 
+func (l *PackIndex) Count() int {
+	var count int
+	for i := range l.heads {
+		count += l.heads[i].NValues
+	}
+	return count
+}
+
 func (l *PackIndex) HeapSize() int {
 	sz := 5*24 + 8
 	sz += len(l.minpks) * 8
@@ -306,11 +333,15 @@ func (l *PackIndex) AddOrUpdate(head PackageHeader) {
 }
 
 func (l *PackIndex) Remove(head PackageHeader) {
-	oldhead, pos := l.heads.RemoveKey(head.Key)
+	l.RemoveKey(head.Key)
+}
+
+func (l *PackIndex) RemoveKey(key []byte) {
+	oldhead, pos := l.heads.RemoveKey(key)
 	if pos < 0 {
 		return
 	}
-	l.deads.AddUnique(head.Key)
+	l.deads.AddUnique(key)
 	l.minpks = append(l.minpks[:pos], l.minpks[pos+1:]...)
 	l.maxpks = append(l.maxpks[:pos], l.maxpks[pos+1:]...)
 	if pos > 0 && pos == l.Len() {
