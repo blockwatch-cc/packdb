@@ -359,15 +359,14 @@ func (d *DB) Table(name string, opts ...Options) (*Table, error) {
 	if err != nil {
 		return nil, err
 	}
-	cacheSize := t.opts.CacheSize
 	if len(opts) > 0 {
-		cacheSize = opts[0].CacheSize
+		t.opts.CacheSize = opts[0].CacheSize
 		if opts[0].JournalSizeLog2 > 0 {
 			t.opts.JournalSizeLog2 = opts[0].JournalSizeLog2
 		}
 	}
-	if cacheSize > 0 {
-		t.cache, err = lru.New2QWithEvict(int(cacheSize), t.onEvictedPackage)
+	if t.opts.CacheSize > 0 {
+		t.cache, err = lru.New2QWithEvict(int(t.opts.CacheSize), t.onEvictedPackage)
 		if err != nil {
 			return nil, err
 		}
