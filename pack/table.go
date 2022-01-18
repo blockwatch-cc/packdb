@@ -375,6 +375,12 @@ func (d *DB) Table(name string, opts ...Options) (*Table, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(opts) > 0 {
+		t.opts.CacheSize = opts[0].CacheSize
+		if opts[0].JournalSizeLog2 > 0 {
+			t.opts.JournalSizeLog2 = opts[0].JournalSizeLog2
+		}
+	}
 	if t.opts.CacheSize > 0 {
 		t.cache, err = lru.New2QWithEvict(int(t.opts.CacheSize), t.onEvictedPackage)
 		if err != nil {
