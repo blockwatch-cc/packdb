@@ -328,15 +328,14 @@ func (t *Table) OpenIndex(idx *Index, opts ...Options) error {
 	if err != nil {
 		return err
 	}
-	cacheSize := idx.opts.CacheSize
 	if len(opts) > 0 {
-		cacheSize = opts[0].CacheSize
+		idx.opts.CacheSize = opts[0].CacheSize
 		if opts[0].JournalSizeLog2 > 0 {
 			idx.opts.JournalSizeLog2 = opts[0].JournalSizeLog2
 		}
 	}
-	if cacheSize > 0 {
-		idx.cache, err = lru.New2QWithEvict(int(cacheSize), idx.onEvictedPackage)
+	if idx.opts.CacheSize > 0 {
+		idx.cache, err = lru.New2QWithEvict(int(idx.opts.CacheSize), idx.onEvictedPackage)
 		if err != nil {
 			return err
 		}
