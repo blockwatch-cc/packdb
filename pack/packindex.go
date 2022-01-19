@@ -1,252 +1,121 @@
-// Copyright (c) 2018-2020 Blockwatch Data Inc.
+// Copyright (c) 2018-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package pack
 
 import (
-	"bytes"
-	"encoding/binary"
-	"fmt"
-	"sort"
+	"encoding/json"
 
-	"blockwatch.cc/packdb/encoding/block"
-	"blockwatch.cc/packdb/vec"
+	"sort"
 )
 
-type PackageHeader struct {
-	Key          []byte                `json:"k"`
-	NFields      int                   `json:"f"`
-	NValues      int                   `json:"v"`
-	PackSize     int                   `json:"s"`
-	BlockHeaders block.BlockHeaderList `json:"b"`
-
-	dirty bool
-}
-
-func (p *Package) Header() PackageHeader {
-	h := PackageHeader{
-		Key:          p.key,
-		NFields:      p.nFields,
-		NValues:      p.nValues,
-		PackSize:     p.packedsize,
-		BlockHeaders: make(block.BlockHeaderList, 0, p.nFields),
-		dirty:        true,
-	}
-	for _, v := range p.blocks {
-		h.BlockHeaders = append(h.BlockHeaders, v.MakeHeader())
-	}
-	return h
-}
-
-func (h PackageHeader) HeapSize() int {
-	// assume 8 bytes behind each min/max interface
-	return 48 + 24 + len(h.BlockHeaders)*64 + 1
-}
-
-func (h *PackageHeader) UpdateStats(pkg *Package) error {
-	if pkg.IsJournal() || pkg.Len() <= 2 {
-		return nil
-	}
-	for i := range h.BlockHeaders {
-		if !h.BlockHeaders[i].IsDirty() {
-			continue
-		}
-		h.BlockHeaders[i].ResetDirty()
-		if h.BlockHeaders[i].Flags&block.BlockFlagBloom == 0 {
-			continue
-		}
-		h.BlockHeaders[i].BuildBloomFilter(pkg.blocks[i])
-	}
-	h.dirty = true
-	return nil
-}
-
-func (h PackageHeader) MarshalBinary() ([]byte, error) {
-	buf := &bytes.Buffer{}
-	if err := h.Encode(buf); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func (h *PackageHeader) UnmarshalBinary(data []byte) error {
-	return h.Decode(bytes.NewBuffer(data))
-}
-
-func (h PackageHeader) Encode(buf *bytes.Buffer) error {
-	var b [8]byte
-	i := binary.PutUvarint(b[:], uint64(len(h.Key)))
-	_, _ = buf.Write(b[:i])
-	_, _ = buf.Write(h.Key)
-	bigEndian.PutUint32(b[0:], uint32(h.NFields))
-	bigEndian.PutUint32(b[4:], uint32(h.NValues))
-	buf.Write(b[:])
-	bigEndian.PutUint32(b[0:], uint32(h.PackSize))
-	buf.Write(b[:4])
-	return h.BlockHeaders.Encode(buf)
-}
-
-func (h *PackageHeader) Decode(buf *bytes.Buffer) error {
-	n, err := binary.ReadUvarint(buf)
-	if err != nil {
-		return fmt.Errorf("pack: reading pack header key: %v", err)
-	}
-	key := buf.Next(int(n))
-	h.Key = make([]byte, len(key))
-	copy(h.Key, key)
-	b := buf.Next(8)
-	h.NFields = int(bigEndian.Uint32(b[0:]))
-	h.NValues = int(bigEndian.Uint32(b[4:]))
-	b = buf.Next(4)
-	h.PackSize = int(bigEndian.Uint32(b[0:]))
-	return h.BlockHeaders.Decode(buf)
-}
-
-type PackageHeaderList []PackageHeader
-
-func (l PackageHeaderList) Len() int           { return len(l) }
-func (l PackageHeaderList) Less(i, j int) bool { return bytes.Compare(l[i].Key, l[j].Key) < 0 }
-func (l PackageHeaderList) Swap(i, j int)      { l[i], l[j] = l[j], l[i] }
-
-func (l *PackageHeaderList) Add(head PackageHeader) (PackageHeader, int, bool) {
-	i := sort.Search(l.Len(), func(i int) bool {
-		return bytes.Compare((*l)[i].Key, head.Key) >= 0
-	})
-	if i < len(*l) && bytes.Compare((*l)[i].Key, head.Key) == 0 {
-		oldhead := (*l)[i]
-		(*l)[i] = head
-		return oldhead, i, false
-	}
-	*l = append(*l, PackageHeader{})
-	copy((*l)[i+1:], (*l)[i:])
-	(*l)[i] = head
-	return PackageHeader{}, i, true
-}
-
-func (l *PackageHeaderList) Remove(head PackageHeader) (PackageHeader, int) {
-	return l.RemoveKey(head.Key)
-}
-
-func (l *PackageHeaderList) RemoveKey(key []byte) (PackageHeader, int) {
-	i := sort.Search(l.Len(), func(i int) bool {
-		return bytes.Compare((*l)[i].Key, key) >= 0
-	})
-	if i < len(*l) && bytes.Compare((*l)[i].Key, key) == 0 {
-		oldhead := (*l)[i]
-		*l = append((*l)[:i], (*l)[i+1:]...)
-		return oldhead, i
-	}
-	return PackageHeader{}, -1
-}
-
-func (h PackageHeaderList) MarshalBinary() ([]byte, error) {
-	buf := &bytes.Buffer{}
-	buf.WriteByte(packageStorageFormatVersionV1)
-	var b [4]byte
-	binary.BigEndian.PutUint32(b[:], uint32(len(h)))
-	buf.Write(b[:])
-	for _, v := range h {
-		if err := v.Encode(buf); err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
-}
-
-func (h *PackageHeaderList) UnmarshalBinary(data []byte) error {
-	if len(data) < 5 {
-		return fmt.Errorf("pack: short package list header, length %d", len(data))
-	}
-	buf := bytes.NewBuffer(data)
-
-	b, _ := buf.ReadByte()
-	if b != packageStorageFormatVersionV1 {
-		return fmt.Errorf("pack: invalid package list header version %d", b)
-	}
-
-	l := int(binary.BigEndian.Uint32(buf.Next(4)))
-
-	*h = make(PackageHeaderList, l)
-
-	for i := range *h {
-		if err := (*h)[i].Decode(buf); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 type PackIndex struct {
-	heads  PackageHeaderList
-	minpks []uint64
-	maxpks []uint64
-	deads  vec.ByteSlice
-	pairs  []pair
-	pkidx  int
+	packs   PackInfoList
+	minpks  []uint64
+	maxpks  []uint64
+	removed []uint32
+	pos     []int32
+	pkidx   int
 }
 
-type pair struct {
-	min uint64
-	pos int
+func (i *PackIndex) MarshalJSON() ([]byte, error) {
+	type M struct {
+		Packs   PackInfoList
+		Minpks  []uint64
+		Maxpks  []uint64
+		Removed []uint32
+		Pos     []int32
+		Pkidx   int
+	}
+	m := &M{
+		Packs:   i.packs,
+		Minpks:  i.minpks,
+		Maxpks:  i.maxpks,
+		Removed: i.removed,
+		Pos:     i.pos,
+		Pkidx:   i.pkidx,
+	}
+	return json.Marshal(m)
 }
 
-func NewPackIndex(heads PackageHeaderList, pkidx int) *PackIndex {
-	if heads == nil {
-		heads = make(PackageHeaderList, 0)
+func NewPackIndex(packs PackInfoList, pkidx int) *PackIndex {
+	if packs == nil {
+		packs = make(PackInfoList, 0)
 	}
 	l := &PackIndex{
-		heads:  heads,
-		minpks: make([]uint64, len(heads), cap(heads)),
-		maxpks: make([]uint64, len(heads), cap(heads)),
-		deads:  make(vec.ByteSlice, 0),
-		pkidx:  pkidx,
-		pairs:  make([]pair, len(heads), cap(heads)),
+		packs:   packs,
+		minpks:  make([]uint64, len(packs), cap(packs)),
+		maxpks:  make([]uint64, len(packs), cap(packs)),
+		removed: make([]uint32, 0),
+		pkidx:   pkidx,
+		pos:     make([]int32, len(packs), cap(packs)),
 	}
-	sort.Sort(l.heads)
-	for i := range l.heads {
-		l.minpks[i] = l.heads[i].BlockHeaders[l.pkidx].MinValue.(uint64)
-		l.maxpks[i] = l.heads[i].BlockHeaders[l.pkidx].MaxValue.(uint64)
-		l.pairs[i].min = l.minpks[i]
-		l.pairs[i].pos = i
+	sort.Sort(l.packs)
+	for i := range l.packs {
+		l.minpks[i] = l.packs[i].Blocks[l.pkidx].MinValue.(uint64)
+		l.maxpks[i] = l.packs[i].Blocks[l.pkidx].MaxValue.(uint64)
+		l.pos[i] = int32(i)
 	}
 	l.Sort()
 	return l
 }
 
+func (l *PackIndex) Clear() {
+	for _, v := range l.packs {
+		l.removed = append(l.removed, v.Key)
+	}
+	l.packs = l.packs[:0]
+	l.minpks = l.minpks[:0]
+	l.maxpks = l.maxpks[:0]
+	l.pos = l.pos[:0]
+}
+
+func (l PackIndex) NextKey() uint32 {
+	if len(l.packs) == 0 {
+		return 0
+	}
+	return l.packs[len(l.packs)-1].Key + 1
+}
+
 func (l *PackIndex) Len() int {
-	return len(l.heads)
+	return len(l.packs)
 }
 
 func (l *PackIndex) Count() int {
 	var count int
-	for i := range l.heads {
-		count += l.heads[i].NValues
+	for i := range l.packs {
+		count += l.packs[i].NValues
 	}
 	return count
 }
 
 func (l *PackIndex) HeapSize() int {
-	sz := 5*24 + 8
+	sz := szPackIndex
 	sz += len(l.minpks) * 8
 	sz += len(l.maxpks) * 8
-	sz += len(l.deads)
-	sz += len(l.pairs) * 16
-	for i := range l.heads {
-		sz += l.heads[i].HeapSize()
+	sz += len(l.removed) * 8
+	sz += len(l.pos) * 4
+	for i := range l.packs {
+		sz += l.packs[i].HeapSize()
 	}
 	return sz
 }
 
 func (l *PackIndex) TableSize() int {
 	var sz int
-	for i := range l.heads {
-		sz += l.heads[i].PackSize
+	for i := range l.packs {
+		sz += l.packs[i].Packsize
 	}
 	return sz
 }
 
 func (l *PackIndex) Sort() {
-	sort.Slice(l.pairs, func(i, j int) bool { return l.pairs[i].min < l.pairs[j].min })
+	sort.Slice(l.pos, func(i, j int) bool {
+		posi, posj := l.pos[i], l.pos[j]
+		mini, maxi := l.minpks[posi], l.maxpks[posi]
+		minj, maxj := l.minpks[posj], l.maxpks[posj]
+		return mini < minj || (mini == minj && maxi < maxj) || (mini == minj && maxi == maxj && i < j)
+	})
 }
 
 func (l *PackIndex) MinMax(n int) (uint64, uint64) {
@@ -260,7 +129,7 @@ func (l *PackIndex) GlobalMinMax() (uint64, uint64) {
 	if l.Len() == 0 {
 		return 0, 0
 	}
-	pos := l.pairs[len(l.pairs)-1].pos
+	pos := l.pos[len(l.pos)-1]
 	return l.minpks[pos], l.maxpks[pos]
 }
 
@@ -268,107 +137,144 @@ func (l *PackIndex) MinMaxSlices() ([]uint64, []uint64) {
 	return l.minpks, l.maxpks
 }
 
-func (l *PackIndex) Get(i int) PackageHeader {
+func (l *PackIndex) Get(i int) PackInfo {
 	if i < 0 || i >= l.Len() {
-		return PackageHeader{}
+		return PackInfo{}
 	}
-	return l.heads[i]
+	return l.packs[i]
 }
 
-func (l *PackIndex) AddOrUpdate(head PackageHeader) {
+func (l *PackIndex) GetSorted(i int) PackInfo {
+	if i < 0 || i >= l.Len() {
+		return PackInfo{}
+	}
+	return l.packs[l.pos[i]]
+}
+
+func (l *PackIndex) AddOrUpdate(head PackInfo) {
 	head.dirty = true
-	l.deads.Remove(head.Key)
-	old, pos, isAdd := l.heads.Add(head)
+	l.removed = uint32Remove(l.removed, head.Key)
+	old, pos, isAdd := l.packs.Add(head)
+	var needsort bool
 
 	if isAdd {
-		var needsort bool
 		if pos > 0 && pos == l.Len()-1 {
-			newmin := l.heads[pos].BlockHeaders[l.pkidx].MinValue.(uint64)
-			newmax := l.heads[pos].BlockHeaders[l.pkidx].MaxValue.(uint64)
-			lastmax := l.heads[l.pairs[len(l.pairs)-1].pos].BlockHeaders[l.pkidx].MaxValue.(uint64)
+			newmin := l.packs[pos].Blocks[l.pkidx].MinValue.(uint64)
+			newmax := l.packs[pos].Blocks[l.pkidx].MaxValue.(uint64)
+			lastmax := l.packs[l.pos[len(l.pos)-1]].Blocks[l.pkidx].MaxValue.(uint64)
 			needsort = newmin < lastmax
-			l.pairs = append(l.pairs, pair{
-				min: newmin,
-				pos: pos,
-			})
+			l.pos = append(l.pos, int32(pos))
 			l.minpks = append(l.minpks, newmin)
 			l.maxpks = append(l.maxpks, newmax)
+
 		} else {
-			if cap(l.pairs) < len(l.heads) {
-				l.pairs = make([]pair, len(l.heads))
-				l.minpks = make([]uint64, len(l.heads))
-				l.maxpks = make([]uint64, len(l.heads))
+			if cap(l.pos) < len(l.packs) {
+				l.pos = make([]int32, len(l.packs))
+				l.minpks = make([]uint64, len(l.packs))
+				l.maxpks = make([]uint64, len(l.packs))
 			}
-			l.pairs = l.pairs[:len(l.heads)]
-			l.minpks = l.minpks[:len(l.heads)]
-			l.maxpks = l.maxpks[:len(l.heads)]
-			for i := range l.heads {
-				l.minpks[i] = l.heads[i].BlockHeaders[l.pkidx].MinValue.(uint64)
-				l.maxpks[i] = l.heads[i].BlockHeaders[l.pkidx].MaxValue.(uint64)
-				l.pairs[i].min = l.minpks[i]
-				l.pairs[i].pos = i
+			l.pos = l.pos[:len(l.packs)]
+			l.minpks = l.minpks[:len(l.packs)]
+			l.maxpks = l.maxpks[:len(l.packs)]
+			for i := range l.packs {
+				l.minpks[i] = l.packs[i].Blocks[l.pkidx].MinValue.(uint64)
+				l.maxpks[i] = l.packs[i].Blocks[l.pkidx].MaxValue.(uint64)
+				l.pos[i] = int32(i)
 			}
 			needsort = true
 		}
-		if needsort {
-			sort.Slice(l.pairs, func(i, j int) bool { return l.pairs[i].min < l.pairs[j].min })
-		}
 	} else {
-		newmin := l.heads[pos].BlockHeaders[l.pkidx].MinValue.(uint64)
-		newmax := l.heads[pos].BlockHeaders[l.pkidx].MaxValue.(uint64)
+		newmin := l.packs[pos].Blocks[l.pkidx].MinValue.(uint64)
+		newmax := l.packs[pos].Blocks[l.pkidx].MaxValue.(uint64)
 		l.minpks[pos] = newmin
 		l.maxpks[pos] = newmax
-		oldmin := old.BlockHeaders[l.pkidx].MinValue.(uint64)
-		if newmin == oldmin {
-			return
-		}
-		i := sort.Search(l.Len(), func(i int) bool { return l.pairs[i].min >= oldmin })
-		if i < l.Len() && l.pairs[i].min == oldmin {
-			l.pairs[i].min = newmin
-		} else {
-			log.Warnf("pack: pack header index update mismatch: old-pack=%x new-pack=%x old-min=%d new-min=%d index=%d/%d",
-				old.Key, head.Key, old.BlockHeaders[l.pkidx].MinValue.(uint64), newmin, i, l.Len())
-		}
+
+		oldmin := old.Blocks[l.pkidx].MinValue.(uint64)
+		oldmax := old.Blocks[l.pkidx].MaxValue.(uint64)
+		needsort = oldmin != newmin || oldmax != newmax
+	}
+	if needsort {
+		l.Sort()
 	}
 }
 
-func (l *PackIndex) Remove(head PackageHeader) {
-	l.RemoveKey(head.Key)
-}
-
-func (l *PackIndex) RemoveKey(key []byte) {
-	oldhead, pos := l.heads.RemoveKey(key)
+func (l *PackIndex) Remove(key uint32) {
+	oldhead, pos := l.packs.RemoveKey(key)
 	if pos < 0 {
 		return
 	}
-	l.deads.AddUnique(key)
-	l.minpks = append(l.minpks[:pos], l.minpks[pos+1:]...)
-	l.maxpks = append(l.maxpks[:pos], l.maxpks[pos+1:]...)
+	l.removed = uint32AddUnique(l.removed, key)
+
 	if pos > 0 && pos == l.Len() {
-		min := oldhead.BlockHeaders[l.pkidx].MinValue.(uint64)
-		i := sort.Search(l.Len(), func(i int) bool { return l.pairs[i].min >= min })
-		l.pairs = append(l.pairs[:i], l.pairs[i+1:]...)
-	} else {
-		l.pairs = l.pairs[:len(l.heads)]
-		for i := range l.heads {
-			l.pairs[i].min = l.heads[i].BlockHeaders[l.pkidx].MinValue.(uint64)
-			l.pairs[i].pos = i
+		min := oldhead.Blocks[l.pkidx].MinValue.(uint64)
+		i := sort.Search(l.Len(), func(i int) bool { return l.minpks[l.pos[i]] >= min })
+		for i < l.Len() && l.pos[i] != int32(pos) && l.minpks[l.pos[i]] == min {
+			i++
 		}
-		sort.Slice(l.pairs, func(i, j int) bool { return l.pairs[i].min < l.pairs[j].min })
+		l.pos = append(l.pos[:i], l.pos[i+1:]...)
+		l.minpks = append(l.minpks[:pos], l.minpks[pos+1:]...)
+		l.maxpks = append(l.maxpks[:pos], l.maxpks[pos+1:]...)
+	} else {
+		l.minpks = append(l.minpks[:pos], l.minpks[pos+1:]...)
+		l.maxpks = append(l.maxpks[:pos], l.maxpks[pos+1:]...)
+		l.pos = l.pos[:len(l.packs)]
+		for i := range l.packs {
+			l.pos[i] = int32(i)
+		}
+		l.Sort()
 	}
 }
 
-func (l *PackIndex) Best(val uint64) (int, uint64, uint64) {
-	numpacks := l.Len()
-	if numpacks == 0 {
-		return 0, 0, 0
+func (l *PackIndex) Best(val uint64) (pos int, packmin uint64, packmax uint64, nextmin uint64) {
+	count := l.Len()
+	if count == 0 {
+		return
 	}
 
-	i := sort.Search(numpacks, func(i int) bool { return l.pairs[i].min > val })
+	i := sort.Search(count, func(i int) bool { return l.minpks[l.pos[i]] > val })
 	if i > 0 {
 		i--
 	}
 
-	pos := l.pairs[i].pos
-	return pos, l.minpks[pos], l.maxpks[pos]
+	if i+1 < count {
+		nextmin = l.minpks[l.pos[i+1]]
+	}
+
+	pos = int(l.pos[i])
+	packmin, packmax = l.minpks[pos], l.maxpks[pos]
+	return
+}
+
+func (l *PackIndex) Next(last int) (pos int, packmin uint64, packmax uint64, nextmin uint64) {
+	next := last + 1
+	count := l.Len()
+	if next >= count {
+		return
+	}
+	if next+1 < count {
+		nextmin = l.minpks[l.pos[next+1]]
+	}
+	pos = int(l.pos[next])
+	packmin, packmax = l.minpks[pos], l.maxpks[pos]
+	return
+}
+
+func uint32Remove(s []uint32, val uint32) []uint32 {
+	l := len(s)
+	idx := sort.Search(l, func(i int) bool { return s[i] >= val })
+	if idx < l && s[idx] == val {
+		s = append(s[:idx], s[idx+1:]...)
+	}
+	return s
+}
+
+func uint32AddUnique(s []uint32, val uint32) []uint32 {
+	l := len(s)
+	idx := sort.Search(l, func(i int) bool { return s[i] >= val })
+	if idx > -1 && s[idx] == val {
+		return s
+	}
+	s = append(s, val)
+	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	return s
 }

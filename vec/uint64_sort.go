@@ -50,6 +50,15 @@ func Uint64RemoveZeros(s []uint64) ([]uint64, int) {
 	return s, n
 }
 
+func Uint64Remove(s []uint64, val uint64) []uint64 {
+	l := len(s)
+	idx := sort.Search(l, func(i int) bool { return s[i] >= val })
+	if idx < l && s[idx] == val {
+		s = append(s[:idx], s[idx+1:]...)
+	}
+	return s
+}
+
 func IntersectSortedUint64(x, y, out []uint64) []uint64 {
 	if out == nil {
 		out = make([]uint64, 0, min(len(x), len(y)))

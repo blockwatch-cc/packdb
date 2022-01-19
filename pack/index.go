@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2020 Blockwatch Data Inc.
+// Copyright (c) 2018-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package pack
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -182,7 +183,7 @@ func (t *Table) CreateIndex(name string, field Field, typ IndexType, opts Option
 		if err := idx.journal.Init(IndexEntry{}, idx.opts.JournalSize()); err != nil {
 			return err
 		}
-		_, err = storePackTx(dbTx, idx.metakey, journalKey, idx.journal, idx.opts.FillLevel)
+		_, err = storePackTx(dbTx, idx.metakey, idx.journal.Key(), idx.journal, idx.opts.FillLevel)
 		if err != nil {
 			return err
 		}
@@ -191,7 +192,7 @@ func (t *Table) CreateIndex(name string, field Field, typ IndexType, opts Option
 		if err := idx.tombstone.Init(IndexEntry{}, idx.opts.JournalSize()); err != nil {
 			return err
 		}
-		_, err = storePackTx(dbTx, idx.metakey, tombstoneKey, idx.tombstone, idx.opts.FillLevel)
+		_, err = storePackTx(dbTx, idx.metakey, idx.tombstone.Key(), idx.tombstone, idx.opts.FillLevel)
 		if err != nil {
 			return err
 		}
@@ -307,7 +308,6 @@ func (t *Table) OpenIndex(idx *Index, opts ...Options) error {
 	} else {
 		log.Debugf("Opening %s_%s index with default opts", t.name, idx.Name)
 	}
-	idx.packs = NewPackIndex(nil, 0)
 	idx.table = t
 	idx.key = []byte(t.name + "_" + idx.Name + "_index")
 	idx.metakey = []byte(t.name + "_" + idx.Name + "_index_meta")
@@ -326,7 +326,7 @@ func (t *Table) OpenIndex(idx *Index, opts ...Options) error {
 		}
 		buf := b.Get(optsKey)
 		if buf == nil {
-			return fmt.Errorf("pack: missing options for index %s", idx.cachekey(nil))
+			return fmt.Errorf("pack: missing options for index %s", idx.name())
 		}
 		err := json.Unmarshal(buf, &idx.opts)
 		if err != nil {
@@ -342,31 +342,24 @@ func (t *Table) OpenIndex(idx *Index, opts ...Options) error {
 		maxJournalSize := idx.opts.JournalSize()
 		idx.stats.JournalTuplesThreshold = int64(maxJournalSize)
 		idx.stats.TombstoneTuplesThreshold = int64(maxJournalSize)
-		idx.journal, err = loadPackTx(dbTx, idx.metakey, journalKey, nil)
+		idx.packs = NewPackIndex(nil, 0)
+		idx.journal, err = loadPackTx(dbTx, idx.metakey, encodePackKey(journalKey), nil)
 		if err != nil {
-			return fmt.Errorf("pack: cannot open journal for index %s: %v", idx.cachekey(nil), err)
+			return fmt.Errorf("pack: cannot open journal for index %s: %v", idx.name(), err)
 		}
 		idx.journal.initType(IndexEntry{})
-		idx.journal.key = journalKey
-		log.Debugf("pack: loaded %s index journal with %d entries", idx.cachekey(nil), idx.journal.Len())
-		idx.tombstone, err = loadPackTx(dbTx, idx.metakey, tombstoneKey, nil)
+		log.Debugf("pack: loaded %s index journal with %d entries", idx.name(), idx.journal.Len())
+		idx.tombstone, err = loadPackTx(dbTx, idx.metakey, encodePackKey(tombstoneKey), nil)
 		if err != nil {
-			return fmt.Errorf("pack: %s index cannot open tombstone: %v", idx.cachekey(nil), err)
+			return fmt.Errorf("pack: %s index cannot open tombstone: %v", idx.name(), err)
 		}
 		idx.tombstone.initType(IndexEntry{})
-		idx.tombstone.key = tombstoneKey
 		log.Debugf("pack: index %s loaded tombstone with %d entries",
 			idx.cachekey(nil), idx.tombstone.Len())
-		return idx.loadPackHeaders(dbTx)
+		return idx.loadPackInfo(dbTx)
 	})
 	if err != nil {
 		return err
-	}
-	if len(opts) > 0 {
-		idx.opts.CacheSize = opts[0].CacheSize
-		if opts[0].JournalSizeLog2 > 0 {
-			idx.opts.JournalSizeLog2 = opts[0].JournalSizeLog2
-		}
 	}
 	if idx.opts.CacheSize > 0 {
 		idx.cache, err = lru.New2QWithEvict(int(idx.opts.CacheSize), idx.onEvictedPackage)
@@ -395,19 +388,19 @@ func (idx *Index) name() string {
 	return string(idx.key)
 }
 
-func (idx *Index) loadPackHeaders(dbTx store.Tx) error {
+func (idx *Index) loadPackInfo(dbTx store.Tx) error {
 	b := dbTx.Bucket(idx.metakey)
 	if b == nil {
 		return ErrNoTable
 	}
-	heads := make(PackageHeaderList, 0)
+	heads := make(PackInfoList, 0)
 	bh := b.Bucket(headerKey)
 	if bh != nil {
-		log.Debugf("pack: %s index loading package headers from bucket", idx.cachekey(nil))
+		log.Debugf("pack: %s index loading package headers from bucket", idx.name())
 		c := bh.Cursor()
 		var err error
 		for ok := c.First(); ok; ok = c.Next() {
-			head := PackageHeader{}
+			head := PackInfo{}
 			err = head.UnmarshalBinary(c.Value())
 			if err != nil {
 				break
@@ -417,13 +410,13 @@ func (idx *Index) loadPackHeaders(dbTx store.Tx) error {
 		}
 		if err != nil {
 			heads = heads[:0]
-			log.Errorf("pack: header decode for index %s pack %x: %v", idx.cachekey(nil), c.Key(), err)
+			log.Errorf("pack: header decode for index %s pack %x: %v", idx.name(), c.Key(), err)
 		} else {
 			idx.packs = NewPackIndex(heads, 0)
 			atomic.StoreInt64(&idx.stats.PacksCount, int64(idx.packs.Len()))
 			atomic.StoreInt64(&idx.stats.MetaSize, int64(idx.packs.HeapSize()))
 			atomic.StoreInt64(&idx.stats.PacksSize, int64(idx.packs.TableSize()))
-			log.Debugf("pack: %s index loaded %d package headers", idx.cachekey(nil), idx.packs.Len())
+			log.Debugf("pack: %s index loaded %d package headers", idx.name(), idx.packs.Len())
 			return nil
 		}
 	}
@@ -436,56 +429,54 @@ func (idx *Index) loadPackHeaders(dbTx store.Tx) error {
 			return fmt.Errorf("pack: cannot scan index pack %s: %v", idx.cachekey(c.Key()), err)
 		}
 		ph.dirty = true
-		ph.Key = make([]byte, len(c.Key()))
-		copy(ph.Key, c.Key())
+		pkg.SetKey(c.Key())
 		if pkg.IsJournal() || pkg.IsTomb() {
+			pkg.Clear()
 			continue
 		}
+		ph.Key = pkg.key
+		_ = ph.UpdateStats(pkg)
 		heads = append(heads, ph)
 		atomic.AddInt64(&idx.stats.MetaBytesRead, int64(len(c.Value())))
+		pkg.Clear()
 	}
 	idx.packs = NewPackIndex(heads, 0)
 	atomic.StoreInt64(&idx.stats.PacksCount, int64(idx.packs.Len()))
 	atomic.StoreInt64(&idx.stats.MetaSize, int64(idx.packs.HeapSize()))
 	atomic.StoreInt64(&idx.stats.PacksSize, int64(idx.packs.TableSize()))
-	log.Debugf("pack: %s index scanned %d package headers", idx.cachekey(nil), idx.packs.Len())
+	log.Debugf("pack: %s index scanned %d package headers", idx.name(), idx.packs.Len())
 	return nil
 }
 
-func (idx *Index) storePackHeaders(dbTx store.Tx) error {
+func (idx *Index) storePackInfo(dbTx store.Tx) error {
 	b := dbTx.Bucket(idx.metakey)
 	if b == nil {
 		return ErrNoTable
 	}
 	hb := b.Bucket(headerKey)
-	for _, k := range idx.packs.deads {
-		hb.Delete(k)
+	for _, k := range idx.packs.removed {
+		hb.Delete(encodePackKey(k))
 	}
-	idx.packs.deads = idx.packs.deads[:0]
-	for i := range idx.packs.heads {
-		if !idx.packs.heads[i].dirty {
+	idx.packs.removed = idx.packs.removed[:0]
+	for i := range idx.packs.packs {
+		if !idx.packs.packs[i].dirty {
 			continue
 		}
-		buf, err := idx.packs.heads[i].MarshalBinary()
+		buf, err := idx.packs.packs[i].MarshalBinary()
 		if err != nil {
 			return err
 		}
-		if err := hb.Put(idx.packs.heads[i].Key, buf); err != nil {
+		if err := hb.Put(idx.packs.packs[i].EncodedKey(), buf); err != nil {
 			return err
 		}
-		idx.packs.heads[i].dirty = false
+		idx.packs.packs[i].dirty = false
 		atomic.AddInt64(&idx.stats.MetaBytesWritten, int64(len(buf)))
 	}
 	return nil
 }
 
 func (idx *Index) AddTx(tx *Tx, pkg *Package, srcPos, srcLen int) error {
-	var pk []uint64
-	if col, err := pkg.Column(pkg.pkindex); err != nil {
-		return err
-	} else {
-		pk, _ = col.([]uint64)
-	}
+	pk := pkg.PkColumn()
 	atomic.AddInt64(&idx.stats.InsertCalls, 1)
 
 	var count int64
@@ -510,8 +501,7 @@ func (idx *Index) AddTx(tx *Tx, pkg *Package, srcPos, srcLen int) error {
 }
 
 func (idx *Index) RemoveTx(tx *Tx, pkg *Package, srcPos, srcLen int) error {
-	col, _ := pkg.Column(pkg.pkindex)
-	pk, _ := col.([]uint64)
+	pk := pkg.PkColumn()
 	atomic.AddInt64(&idx.stats.DeleteCalls, 1)
 
 	var count int64
@@ -548,8 +538,7 @@ func (idx *Index) CanMatch(cond Condition) bool {
 
 func (idx *Index) LookupTx(ctx context.Context, tx *Tx, cond Condition) ([]uint64, error) {
 	if !idx.CanMatch(cond) {
-		return nil, fmt.Errorf("pack: condition %s incompatibe with %s index %s_%s",
-			cond, idx.Type, idx.table.name, idx.Name)
+		return nil, fmt.Errorf("pack: %s: incompatible condition %", idx.name(), cond)
 	}
 
 	keys := idx.table.pkPool.Get().([]uint64)
@@ -562,8 +551,7 @@ func (idx *Index) LookupTx(ctx context.Context, tx *Tx, cond Condition) ([]uint6
 	case FilterModeIn, FilterModeNotIn:
 		slice := reflect.ValueOf(cond.Value)
 		if slice.Kind() != reflect.Slice {
-			return nil, fmt.Errorf("pack: %s index lookup requires slice type, got %T",
-				idx.Type, cond.Value)
+			return nil, fmt.Errorf("pack: %s index lookup requires slice type, got %T", idx.name(), cond.Value)
 		}
 		for i, l := 0, slice.Len(); i < l; i++ {
 			v := slice.Index(i).Interface()
@@ -590,12 +578,20 @@ func (idx *Index) lookupKeys(ctx context.Context, tx *Tx, in []uint64, neg bool)
 		return []uint64{}, nil
 	}
 
+	var notfound []uint64
+	if neg {
+		notfound = make([]uint64, len(in))
+		copy(notfound, in)
+	}
+
 	out := idx.table.pkPool.Get().([]uint64)
 	var nPacks int
 
 	for nextpack := idx.packs.Len() - 1; nextpack >= 0; nextpack-- {
-		if len(in) == 0 {
-			break
+
+		min, max := idx.packs.MinMax(nextpack)
+		if max < in[0] || min > in[len(in)-1] {
+			continue
 		}
 
 		if util.InterruptRequested(ctx) {
@@ -604,53 +600,46 @@ func (idx *Index) lookupKeys(ctx context.Context, tx *Tx, in []uint64, neg bool)
 			return nil, ctx.Err()
 		}
 
-		min, max := idx.packs.MinMax(nextpack)
-		if max < in[0] || min > in[len(in)-1] {
-			continue
-		}
-
-		ipkg, err := idx.loadSharedPack(tx, idx.packs.heads[nextpack].Key, true)
+		ipkg, err := idx.loadSharedPack(tx, idx.packs.Get(nextpack).Key, true)
 		if err != nil {
 			return nil, err
 		}
 		nPacks++
-		col, _ := ipkg.Column(0)
-		keys, _ := col.([]uint64)
-		col, _ = ipkg.Column(1)
+
+		keys := ipkg.PkColumn()
+		col, _ := ipkg.Column(1)
 		values, _ := col.([]uint64)
 
-		for h, i, hl, il := 0, 0, len(keys), len(in); h < hl && i < il; {
-			if max < in[i] {
+		first := sort.Search(len(in), func(x int) bool { return in[x] >= min })
+		for k, i, kl, il := 0, first, len(keys), len(in); k < kl && i < il; {
+
+			k += sort.Search(kl-k, func(x int) bool { return keys[x+k] >= in[i] })
+			if k == kl {
 				break
 			}
-			for h < hl && keys[h] < in[i] {
-				h++
-			}
-			if h == hl {
-				break
-			}
-			for i < il && keys[h] > in[i] {
+
+			for i < il && keys[k] > in[i] {
 				i++
 			}
+
 			if i == il {
 				break
 			}
-			if keys[h] == in[i] {
-				out = append(out, values[h])
-				for ; h+1 < hl && keys[h+1] == in[i]; h++ {
-					out = append(out, values[h+1])
+
+			if keys[k] == in[i] {
+				out = append(out, values[k])
+				notfound = vec.Uint64Remove(notfound, in[i])
+				for ; k+1 < kl && keys[k+1] == in[i]; k++ {
+					out = append(out, values[k+1])
 				}
-				if h+1 == hl && min == in[i] {
-					break
-				}
-				in = append(in[:i], in[i+1:]...)
-				il--
+				i++
 			}
 		}
 	}
+
 	if neg {
 		idx.table.pkPool.Put(out[:0])
-		out = in
+		out = notfound
 	}
 
 	if len(out) > 1 && !neg {
@@ -678,7 +667,7 @@ func (idx *Index) Reindex(ctx context.Context, flushEvery int, ch chan<- float64
 
 func (idx *Index) ReindexTx(ctx context.Context, tx *Tx, flushEvery int, ch chan<- float64) error {
 	for i := idx.packs.Len() - 1; i >= 0; i-- {
-		key := idx.packs.heads[i].Key
+		key := idx.packs.Get(i).EncodedKey()
 		cachekey := idx.cachekey(key)
 		if err := tx.deletePack(idx.key, key); err != nil {
 			return err
@@ -688,11 +677,11 @@ func (idx *Index) ReindexTx(ctx context.Context, tx *Tx, flushEvery int, ch chan
 	idx.packs = NewPackIndex(nil, 0)
 
 	idx.journal.Clear()
-	if _, err := tx.storePack(idx.metakey, journalKey, idx.journal, idx.opts.FillLevel); err != nil {
+	if _, err := tx.storePack(idx.metakey, encodePackKey(journalKey), idx.journal, idx.opts.FillLevel); err != nil {
 		return err
 	}
 	idx.tombstone.Clear()
-	if _, err := tx.storePack(idx.metakey, tombstoneKey, idx.tombstone, idx.opts.FillLevel); err != nil {
+	if _, err := tx.storePack(idx.metakey, encodePackKey(tombstoneKey), idx.tombstone, idx.opts.FillLevel); err != nil {
 		return err
 	}
 
@@ -700,7 +689,7 @@ func (idx *Index) ReindexTx(ctx context.Context, tx *Tx, flushEvery int, ch chan
 		flushEvery = 128
 	}
 
-	for i, ph := range idx.table.packs.heads {
+	for i, ph := range idx.table.packs.packs {
 		if util.InterruptRequested(ctx) {
 			return ctx.Err()
 		}
@@ -743,7 +732,7 @@ func (idx *Index) ReindexTx(ctx context.Context, tx *Tx, flushEvery int, ch chan
 	}
 
 	if idx.journal.IsDirty() {
-		_, err := tx.storePack(idx.metakey, journalKey, idx.journal, idx.opts.FillLevel)
+		_, err := tx.storePack(idx.metakey, encodePackKey(journalKey), idx.journal, idx.opts.FillLevel)
 		if err != nil {
 			return err
 		}
@@ -754,15 +743,15 @@ func (idx *Index) ReindexTx(ctx context.Context, tx *Tx, flushEvery int, ch chan
 func (idx *Index) CloseTx(tx *Tx) error {
 	log.Debugf("pack: closing %s index %s with %d/%d records", idx.Type,
 		idx.cachekey(nil), idx.journal.Len(), idx.tombstone.Len())
-	_, err := tx.storePack(idx.metakey, journalKey, idx.journal, idx.opts.FillLevel)
+	_, err := tx.storePack(idx.metakey, encodePackKey(journalKey), idx.journal, idx.opts.FillLevel)
 	if err != nil {
 		return err
 	}
-	_, err = tx.storePack(idx.metakey, tombstoneKey, idx.tombstone, idx.opts.FillLevel)
+	_, err = tx.storePack(idx.metakey, encodePackKey(tombstoneKey), idx.tombstone, idx.opts.FillLevel)
 	if err != nil {
 		return err
 	}
-	if err := idx.storePackHeaders(tx.tx); err != nil {
+	if err := idx.storePackInfo(tx.tx); err != nil {
 		return err
 	}
 	return nil
@@ -771,6 +760,7 @@ func (idx *Index) CloseTx(tx *Tx) error {
 func (idx *Index) FlushTx(ctx context.Context, tx *Tx) error {
 	atomic.AddInt64(&idx.stats.FlushCalls, 1)
 	atomic.AddInt64(&idx.stats.FlushedTuples, int64(idx.journal.Len()+idx.tombstone.Len()))
+	lvl := log.Level()
 	begin := time.Now()
 	idx.stats.LastFlushTime = begin
 
@@ -781,250 +771,231 @@ func (idx *Index) FlushTx(ctx context.Context, tx *Tx) error {
 		return err
 	}
 
-	col, _ := idx.tombstone.Column(0)
-	dead, _ := col.([]uint64)
-	col, _ = idx.tombstone.Column(1)
+	dead := idx.tombstone.PkColumn()
+	col, _ := idx.tombstone.Column(1)
 	deadval, _ := col.([]uint64)
-	col, _ = idx.journal.Column(0)
-	pk, _ := col.([]uint64)
+
+	pk := idx.journal.PkColumn()
 	col, _ = idx.journal.Column(1)
 	pkval, _ := col.([]uint64)
+
 	var nAdd, nDel, nParts, nBytes int
 
-	log.Debugf("flush: %s idx %s %d journal and %d tombstone records",
-		idx.Type, idx.cachekey(nil), len(pk), len(dead))
+	log.Debugf("pack: %s flushing %d journal and %d tombstone records",
+		idx.name(), len(pk), len(dead))
 
-	for j, d, jl, dl := 0, 0, len(pk), len(dead); j < jl && d < dl; {
-		for d < dl && dead[d] < pk[j] {
+	if len(pk) > 0 && len(dead) > 0 {
+		var d1, j1 int
+		d1 = sort.Search(len(dead), func(x int) bool { return dead[x] >= pk[0] })
+
+		if d1 < len(dead) {
+			j1 = sort.Search(len(pk), func(x int) bool { return pk[x] >= dead[d1] })
+		}
+
+		for j, d, jl, dl := j1, d1, len(pk), len(dead); j < jl && d < dl; {
+			j += sort.Search(jl-j, func(x int) bool { return pk[x+j] >= dead[d] })
+
+			if j == jl {
+				break
+			}
+
+			for d < dl && pk[j] > dead[d] {
+				d++
+			}
+
+			if d == dl {
+				break
+			}
+
+			for dead[d] == pk[j] && j < jl {
+				if deadval[d] == pkval[j] {
+					pkval[j] = 0
+					deadval[d] = 0
+					nDel++
+					j++
+					break
+				}
+				j++
+			}
 			d++
 		}
-		if d == dl {
-			break
-		}
-		for j < jl && dead[d] > pk[j] {
-			j++
-		}
-		if j == jl {
-			break
-		}
-		if dead[d] == pk[j] {
-			for i := 0; j+i < jl && dead[d] == pk[j+i]; {
-				if deadval[d] == pkval[j+i] {
-					idx.journal.Delete(j+i, 1)
-					jl--
-					nDel++
-					col, _ = idx.journal.Column(idx.journal.pkindex)
-					pk, _ = col.([]uint64)
-					col, _ = idx.journal.Column(1)
-					pkval, _ = col.([]uint64)
-				} else {
-					i++
-				}
-			}
-			idx.tombstone.Delete(d, 1)
-			dl--
-			col, _ = idx.tombstone.Column(idx.tombstone.pkindex)
-			dead, _ = col.([]uint64)
-			col, _ = idx.tombstone.Column(1)
-			deadval, _ = col.([]uint64)
-		}
-	}
-	log.Debugf("flush: %s idx %s deleted %d journal entries",
-		idx.Type, idx.cachekey(nil), nDel)
-
-	if idx.tombstone.Len() > 0 {
-		var packsProcessed int
-		for nextPack, lenPacks := 0, idx.packs.Len(); len(dead) > 0 && packsProcessed < 3*lenPacks; nextPack = (nextPack + 1) % lenPacks {
-			packsProcessed++
-			min, max := idx.packs.MinMax(nextPack)
-			if max < dead[0] || min > dead[len(dead)-1] {
-				continue
-			}
-
-			pkg, err := idx.loadWritablePack(tx, idx.packs.heads[nextPack].Key)
-			if err != nil {
-				return err
-			}
-
-			log.Debugf("flush: %s idx removing dead entries from pack %s",
-				idx.Type, idx.cachekey(pkg.key))
-
-			col, _ = pkg.Column(0)
-			pk, _ = col.([]uint64)
-			col, _ = pkg.Column(1)
-			pkval, _ = col.([]uint64)
-
-			before := nDel
-			for i, d, il, dl := 0, 0, len(pk), len(dead); i < il && d < dl; {
-				if max < dead[d] {
-					break
-				}
-				for d < dl && dead[d] < pk[i] {
-					d++
-				}
-				if d == dl {
-					break
-				}
-				for i < il && dead[d] > pk[i] {
-					i++
-				}
-				if i == il {
-					break
-				}
-				if dead[d] == pk[i] {
-					for j := 0; i+j < il && dead[d] == pk[i+j]; {
-						if deadval[d] == pkval[i+j] {
-							pkg.Delete(i+j, 1)
-							il--
-							nDel++
-							col, _ = pkg.Column(0)
-							pk, _ = col.([]uint64)
-							col, _ = pkg.Column(1)
-							pkval, _ = col.([]uint64)
-						} else {
-							j++
-						}
-					}
-
-					if il > 0 && d+1 == dl && max == dead[d] {
-						break
-					}
-
-					idx.tombstone.Delete(d, 1)
-					dl--
-					col, _ = idx.tombstone.Column(0)
-					dead, _ = col.([]uint64)
-					col, _ = idx.tombstone.Column(1)
-					deadval, _ = col.([]uint64)
-				}
-			}
-			log.Debugf("flush: %s idx removed %d dead entries from pack %s, %d are left",
-				idx.Type, nDel-before, idx.cachekey(pkg.key), idx.tombstone.Len())
-
-			n, err := idx.storePack(tx, pkg)
-			idx.recyclePackage(pkg)
-			if err != nil {
-				return err
-			}
-			nParts++
-			nBytes += n
-
-			if tx.Pending() >= txMaxSize {
-				if err := idx.storePackHeaders(tx.tx); err != nil {
-					return err
-				}
-				if err := tx.CommitAndContinue(); err != nil {
-					return err
-				}
-				if util.InterruptRequested(ctx) {
-					_, err := tx.storePack(idx.metakey, tombstoneKey, idx.tombstone, idx.opts.FillLevel)
-					if err != nil {
-						return err
-					}
-					if err := tx.Commit(); err != nil {
-						return err
-					}
-					return ctx.Err()
-				}
-			}
-		}
-		log.Debugf("flush: %s idx %s removed %d dead entries total, %d are not found",
-			idx.Type, idx.cachekey(nil), nDel, idx.tombstone.Len())
-
-		if idx.tombstone.Len() > 0 {
-			idx.tombstone.Clear()
-		}
-
-		if idx.tombstone.IsDirty() {
-			_, err := tx.storePack(idx.metakey, tombstoneKey, idx.tombstone, idx.opts.FillLevel)
-			if err != nil {
-				return err
-			}
-			if err := tx.CommitAndContinue(); err != nil {
-				return err
-			}
-		}
+		log.Debugf("pack: %s flush marked %d dead journal records", idx.name(), nDel)
 	}
 
-	col, _ = idx.journal.Column(idx.journal.pkindex)
-	pk, _ = col.([]uint64)
+	var (
+		pkg                         *Package
+		packsz                      int
+		jpos, tpos, jlen, tlen      int
+		lastpack, nextpack          int
+		nextid                      uint64
+		packmax, nextmin, globalmax uint64
+		needsort                    bool
+		loop, maxloop               int
+	)
 
-	if idx.journal.Len() > 0 {
-		var (
-			pkg           *Package
-			err           error
-			lastpack      int
-			nextpack      int = -1
-			min, max, rng uint64
-			lastkey       uint64
-			needsort      bool
-			packsz        int = idx.opts.PackSize()
-		)
+	packsz = idx.opts.PackSize()
+	jlen, tlen = len(pk), len(dead)
+	_, globalmax = idx.packs.GlobalMinMax()
+	maxloop = 2*idx.packs.Len() + 2*jlen/packsz + 2
 
-		if idx.packs.Len() == 0 {
-			pkg = idx.packPool.Get().(*Package)
-			pkg.key = idx.partkey(idx.packs.Len())
+	if idx.packs.Len() == 0 {
+		pkg = idx.packPool.Get().(*Package)
+		pkg.key = idx.packs.NextKey()
+	}
+
+	for {
+		if jpos >= jlen && tpos >= tlen {
+			break
 		}
 
-		for i, l := 0, len(pk); i < l; i++ {
-			if nextpack < 0 || (pk[i]-min > rng) {
-				nextpack, min, max = idx.packs.Best(pk[i])
-				rng = max - min + 1
-			}
+		for ; jpos < jlen && pkval[jpos] == 0; jpos++ {
+		}
 
-			if lastpack != nextpack && pkg != nil {
-				if pkg.IsDirty() {
-					if needsort {
-						if err := pkg.PkSort(); err != nil {
-							return err
-						}
-						needsort = false
-					}
-					n, err := idx.storePack(tx, pkg)
-					if err != nil {
-						return err
-					}
-					nParts++
-					nBytes += n
+		for ; tpos < tlen && deadval[tpos] == 0; tpos++ {
+		}
+
+		for ; tpos < tlen && dead[tpos] > globalmax; tpos++ {
+		}
+
+		switch true {
+		case jpos < jlen && tpos < tlen:
+			nextid = util.MinU64(pk[jpos], dead[tpos])
+		case jpos < jlen && tpos >= tlen:
+			nextid = pk[jpos]
+		case jpos >= jlen && tpos < tlen:
+			nextid = dead[tpos]
+		default:
+			break
+		}
+
+		nextpack, _, packmax, nextmin = idx.packs.Best(nextid)
+
+		if lastpack != nextpack && pkg != nil {
+			if pkg.IsDirty() {
+				if needsort {
+					pkg.PkSort()
 				}
-				pkg = nil
-				lastkey = 0
-				needsort = false
-				lastpack = nextpack
+				n, err := idx.storePack(tx, pkg)
+				if err != nil {
+					return err
+				}
+				nParts++
+				nBytes += n
 				if tx.Pending() >= txMaxSize {
-					if err := idx.storePackHeaders(tx.tx); err != nil {
+					if err := idx.storePackInfo(tx.tx); err != nil {
 						return err
 					}
 					if err := tx.CommitAndContinue(); err != nil {
 						return err
 					}
 				}
+				nextpack, _, packmax, nextmin = idx.packs.Best(nextid)
 			}
+			pkg = nil
+			needsort = false
+		}
 
-			if pkg == nil {
-				pkg, err = idx.loadWritablePack(tx, idx.packs.heads[nextpack].Key)
-				if err != nil {
-					return err
-				}
-				lastkey, _ = pkg.Uint64At(pkg.pkindex, pkg.Len()-1)
-			}
-
-			err := pkg.AppendFrom(idx.journal, i, 1, false)
+		if pkg == nil {
+			var err error
+			pkg, err = idx.loadWritablePack(tx, idx.packs.Get(nextpack).Key)
 			if err != nil {
 				return err
 			}
-			needsort = needsort || pk[i] < lastkey
-			lastkey = pk[i]
-			min = util.MinU64(min, pk[i])
-			max = util.MaxU64(max, pk[i])
-			rng = max - min + 1
-			nAdd++
+			lastpack = nextpack
+		}
+
+		loop++
+		if loop > 2*maxloop {
+			log.Errorf("pack: %s stopping infinite flush loop %d: tomb-flush-pos=%d/%d journal-flush-pos=%d/%d pack=%d/%d nextid=%d",
+				idx.name(), loop, tpos, tlen, jpos, jlen, lastpack, idx.packs.Len(), nextid,
+			)
+			return fmt.Errorf("pack: %s infinite flush loop detected. Database is likely corrupted.", idx.name())
+		} else if loop > maxloop {
+			log.SetLevel(levelDebug)
+			log.Debugf("pack: %s circuit breaker activated at loop %d tomb-flush-pos=%d/%d journal-flush-pos=%d/%d pack=%d/%d nextid=%d",
+				idx.name(), loop, tpos, tlen, jpos, jlen, lastpack, idx.packs.Len(), nextid,
+			)
+		}
+
+		if tpos < tlen && packmax > 0 && dead[tpos] <= packmax {
+			keycol := pkg.PkColumn()
+			col, _ := pkg.Column(1)
+			valcol, _ := col.([]uint64)
+
+			for ppos := 0; tpos < tlen; tpos++ {
+				if deadval[tpos] == 0 {
+					continue
+				}
+
+				key := dead[tpos]
+
+				if key > packmax {
+					break
+				}
+
+				ppos += sort.Search(len(keycol)-ppos, func(i int) bool { return keycol[i+ppos] >= key })
+				if ppos == len(keycol) || keycol[ppos] != key {
+					deadval[tpos] = 0
+					continue
+				}
+
+				n := 1
+				for tpos+n < tlen &&
+					ppos+n < len(keycol) &&
+					keycol[ppos+n] == dead[tpos+n] &&
+					valcol[ppos+n] == deadval[tpos+n] {
+					n++
+				}
+
+				pkg.Delete(ppos, n)
+
+				for i := 0; i < n; i++ {
+					deadval[tpos+i] = 0
+				}
+				nDel += n
+
+				keycol = pkg.PkColumn()
+				col, _ = pkg.Column(1)
+				valcol, _ = col.([]uint64)
+
+				packmax = 0
+				if l := len(keycol); l > 0 {
+					packmax = keycol[l-1]
+				}
+
+				tpos += n - 1
+			}
+		}
+
+		for jpos < jlen {
+			if pkval[jpos] == 0 {
+				jpos++
+				continue
+			}
+
+			if nextmin > 0 && pk[jpos] >= nextmin {
+				break
+			}
+
+			n, l := 1, pkg.Len()
+			for jpos+n < jlen &&
+				l+n < packsz &&
+				(nextmin == 0 || pk[jpos+n] < nextmin) &&
+				pkval[jpos+n] > 0 {
+				n++
+			}
+			if err := pkg.AppendFrom(idx.journal, jpos, n, true); err != nil {
+				return err
+			}
+			needsort = needsort || pk[jpos] < packmax
+			packmax = util.MaxU64(packmax, pk[jpos])
+			globalmax = util.MaxU64(globalmax, packmax)
+			nAdd += n
+			jpos += n
 
 			if pkg.Len() == packsz {
 				if needsort {
-					if err := pkg.PkSort(); err != nil {
-						return err
-					}
+					pkg.PkSort()
 					needsort = false
 				}
 				n, err := idx.splitPack(tx, pkg)
@@ -1033,55 +1004,55 @@ func (idx *Index) FlushTx(ctx context.Context, tx *Tx) error {
 				}
 				nParts++
 				nBytes += n
-				lastkey, _ = pkg.Uint64At(pkg.pkindex, pkg.Len()-1)
-				needsort = false
-				nextpack = -1
+				lastpack = -1
+				pkg = nil
+
 				if tx.Pending() >= txMaxSize {
-					if err := idx.storePackHeaders(tx.tx); err != nil {
+					if err := idx.storePackInfo(tx.tx); err != nil {
 						return err
 					}
 					if err := tx.CommitAndContinue(); err != nil {
 						return err
 					}
 				}
+				break
 			}
-		}
-
-		if pkg != nil && pkg.IsDirty() {
-			if needsort {
-				if err := pkg.PkSort(); err != nil {
-					return err
-				}
-			}
-			n, err := idx.storePack(tx, pkg)
-			if err != nil {
-				return err
-			}
-			idx.recyclePackage(pkg)
-			nParts++
-			nBytes += n
-		}
-		idx.journal.Clear()
-		_, err = tx.storePack(idx.metakey, journalKey, idx.journal, idx.opts.FillLevel)
-		if err != nil {
-			return err
 		}
 	}
 
-	if err := idx.storePackHeaders(tx.tx); err != nil {
-		return err
+	if pkg != nil && pkg.IsDirty() {
+		if needsort {
+			pkg.PkSort()
+			needsort = false
+		}
+		n, err := idx.storePack(tx, pkg)
+		if err != nil {
+			return err
+		}
+		pkg = nil
+		nParts++
+		nBytes += n
 	}
 
 	atomic.StoreInt64(&idx.stats.PacksCount, int64(idx.packs.Len()))
 	atomic.StoreInt64(&idx.stats.TupleCount, int64(idx.packs.Count()))
 	atomic.StoreInt64(&idx.stats.MetaSize, int64(idx.packs.HeapSize()))
 	atomic.StoreInt64(&idx.stats.PacksSize, int64(idx.packs.TableSize()))
+	idx.stats.LastFlushDuration = time.Since(begin)
 
 	log.Debugf("flush: %s index %s %d packs add=%d del=%d total_size=%s in %s",
 		idx.Type, idx.cachekey(nil), nParts, nAdd, nDel, util.ByteSize(nBytes),
-		time.Since(begin))
+		idx.stats.LastFlushDuration)
 
-	return nil
+	idx.tombstone.Clear()
+	idx.journal.Clear()
+	log.SetLevel(lvl)
+
+	if err := idx.storePackInfo(tx.tx); err != nil {
+		return err
+	}
+
+	return tx.CommitAndContinue()
 }
 
 func (idx *Index) splitPack(tx *Tx, pkg *Package) (int, error) {
@@ -1098,7 +1069,7 @@ func (idx *Index) splitPack(tx *Tx, pkg *Package) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	newpkg.key = idx.partkey(idx.packs.Len())
+	newpkg.key = idx.packs.NextKey()
 	n, err := idx.storePack(tx, newpkg)
 	if err != nil {
 		return 0, err
@@ -1111,13 +1082,8 @@ func (idx Index) cachekey(key []byte) string {
 	return string(idx.key) + "/" + hex.EncodeToString(key)
 }
 
-func (idx Index) partkey(id int) []byte {
-	var buf [4]byte
-	bigEndian.PutUint32(buf[:], uint32(id))
-	return buf[:]
-}
-
-func (idx *Index) loadSharedPack(tx *Tx, key []byte, touch bool) (*Package, error) {
+func (idx *Index) loadSharedPack(tx *Tx, id uint32, touch bool) (*Package, error) {
+	key := encodePackKey(id)
 	cachekey := idx.cachekey(key)
 	cachefn := idx.cache.Peek
 	if touch {
@@ -1151,12 +1117,13 @@ func (idx *Index) loadSharedPack(tx *Tx, key []byte, touch bool) (*Package, erro
 	return pkg, nil
 }
 
-func (idx *Index) loadWritablePack(tx *Tx, key []byte) (*Package, error) {
+func (idx *Index) loadWritablePack(tx *Tx, id uint32) (*Package, error) {
+	key := encodePackKey(id)
 	if cached, ok := idx.cache.Get(idx.cachekey(key)); ok {
 		atomic.AddInt64(&idx.stats.PackCacheHits, 1)
 		pkg := cached.(*Package)
 		clone := pkg.Clone(true, idx.opts.PackSize())
-		clone.SetKey(pkg.key)
+		clone.key = pkg.key
 		clone.cached = false
 		return clone, nil
 	}
@@ -1166,16 +1133,14 @@ func (idx *Index) loadWritablePack(tx *Tx, key []byte) (*Package, error) {
 	if err != nil {
 		return nil, err
 	}
-	pkg.SetKey(key)
 	pkg.tinfo = idx.journal.tinfo
-	pkg.pkindex = 0
 	atomic.AddInt64(&idx.stats.PacksLoaded, 1)
 	atomic.AddInt64(&idx.stats.PacksBytesRead, int64(pkg.packedsize))
 	return pkg, nil
 }
 
 func (idx *Index) storePack(tx *Tx, pkg *Package) (int, error) {
-	key := pkg.key
+	key := pkg.Key()
 
 	defer func() {
 		cachekey := idx.cachekey(key)
@@ -1187,16 +1152,18 @@ func (idx *Index) storePack(tx *Tx, pkg *Package) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		head := pkg.Header()
-		if err := head.UpdateStats(pkg); err != nil {
+		info := pkg.Info()
+		err = info.UpdateStats(pkg)
+		if err != nil {
 			return 0, err
 		}
-		idx.packs.AddOrUpdate(head)
+
+		idx.packs.AddOrUpdate(info)
 		atomic.AddInt64(&idx.stats.PacksStored, 1)
 		atomic.AddInt64(&idx.stats.PacksBytesWritten, int64(n))
 		return n, nil
 	} else {
-		idx.packs.RemoveKey(key)
+		idx.packs.Remove(pkg.key)
 		if err := tx.deletePack(idx.key, key); err != nil {
 			return 0, err
 		}

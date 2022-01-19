@@ -47,6 +47,10 @@ func (f FieldFlags) BlockFlags() block.BlockFlags {
 	return 0
 }
 
+func (f FieldFlags) Contains(i FieldFlags) bool {
+	return f&i > 0
+}
+
 type FieldType string
 
 const (
@@ -65,7 +69,7 @@ type Field struct {
 	Name      string     `json:"name"`
 	Alias     string     `json:"alias"`
 	Type      FieldType  `json:"type"`
-	Flags     FieldFlags `json:"flags"` // primary, indexed, convert, compression
+	Flags     FieldFlags `json:"flags"` // primary, indexed, convert, compression, bloom
 	Precision int        `json:"prec"`  // floating point precision
 }
 
@@ -505,6 +509,46 @@ func (t FieldType) ToString(val interface{}) string {
 		return strings.Join(ss, ", ")
 	}
 	return util.ToString(val)
+}
+
+func (t FieldType) Bytes(val interface{}) []byte {
+	if val == nil {
+		return nil
+	}
+	var buf [8]byte
+	switch t {
+	case FieldTypeBytes:
+		return val.([]byte)
+	case FieldTypeString:
+		if s, ok := val.(string); ok {
+			return []byte(s)
+		}
+		return val.([]byte)
+	case FieldTypeDatetime:
+		if i, ok := val.(int64); ok {
+			bigEndian.PutUint64(buf[:], uint64(i))
+		} else {
+			bigEndian.PutUint64(buf[:], uint64(val.(time.Time).UnixNano()))
+		}
+		return buf[:]
+	case FieldTypeBoolean:
+		if v := val.(bool); v {
+			return []byte{1}
+		} else {
+			return []byte{0}
+		}
+	case FieldTypeInt64:
+		bigEndian.PutUint64(buf[:], uint64(val.(int64)))
+		return buf[:]
+	case FieldTypeUint64:
+		bigEndian.PutUint64(buf[:], val.(uint64))
+		return buf[:]
+	case FieldTypeFloat64:
+		bigEndian.PutUint64(buf[:], math.Float64bits(val.(float64)))
+		return buf[:]
+	default:
+		return nil
+	}
 }
 
 func (t FieldType) Equal(xa, xb interface{}) bool {

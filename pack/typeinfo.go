@@ -10,11 +10,24 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"blockwatch.cc/packdb/encoding/block"
+	"blockwatch.cc/packdb/filter/bloom"
 )
 
 const (
 	tagName  = "pack"
 	tagAlias = "json"
+)
+
+var (
+	szPackInfo    = int(reflect.TypeOf(PackInfo{}).Size())
+	szBlockInfo   = int(reflect.TypeOf(block.BlockHeader{}).Size())
+	szBloomFilter = int(reflect.TypeOf(bloom.Filter{}).Size())
+	szPackIndex   = int(reflect.TypeOf(PackIndex{}).Size())
+	szPackage     = int(reflect.TypeOf(Package{}).Size())
+	szField       = int(reflect.TypeOf(Field{}).Size())
+	szBlock       = int(reflect.TypeOf(block.Block{}).Size())
 )
 
 type typeInfo struct {

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2020 Blockwatch Data Inc.
+// Copyright (c) 2018-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package pack
@@ -22,6 +22,7 @@ const (
 )
 
 type Package struct {
+	key        uint32
 	used       int64
 	version    byte
 	nFields    int
@@ -30,7 +31,6 @@ type Package struct {
 	names      []string
 	blocks     []*Block
 	namemap    map[string]int
-	key        []byte
 	tinfo      *typeInfo
 	pkindex    int
 	pkmap      map[uint64]int
@@ -41,23 +41,40 @@ type Package struct {
 	stripped   bool
 }
 
+func (p Package) IsJournal() bool {
+	return p.key == journalKey
+}
+
+func (p Package) IsTomb() bool {
+	return p.key == tombstoneKey
+}
+
 func (p *Package) Key() []byte {
-	return p.key
+	return encodePackKey(p.key)
 }
 
 func (p *Package) SetKey(key []byte) {
-	if len(p.key) != len(key) {
-		p.key = make([]byte, len(key))
+	switch {
+	case bytes.Compare(key, []byte("_journal")) == 0:
+		p.key = journalKey
+	case bytes.Compare(key, []byte("_tombstone")) == 0:
+		p.key = tombstoneKey
+	default:
+		p.key = bigEndian.Uint32(key)
 	}
-	copy(p.key, key)
 }
 
-func (p *Package) IsJournal() bool {
-	return bytes.Compare(journalKey, p.key) == 0
-}
-
-func (p *Package) IsTomb() bool {
-	return bytes.Compare(tombstoneKey, p.key) == 0
+func encodePackKey(key uint32) []byte {
+	switch key {
+	case journalKey:
+		return []byte("_journal")
+	case tombstoneKey:
+		return []byte("_tombstone")
+	default:
+		var buf [4]byte
+		bigEndian.PutUint32(buf[:], key)
+		return buf[:]
+	}
 }
 
 func (p *Package) PkMap() map[uint64]int {
@@ -307,6 +324,7 @@ func (p *Package) InitFields(fields FieldList, sz int) error {
 
 func (p *Package) Clone(copydata bool, sz int) *Package {
 	np := &Package{
+		key:      0,
 		version:  p.version,
 		nFields:  p.nFields,
 		nValues:  0,
@@ -314,7 +332,6 @@ func (p *Package) Clone(copydata bool, sz int) *Package {
 		names:    p.names,
 		namemap:  make(map[string]int),
 		blocks:   make([]*Block, p.nFields),
-		key:      nil,
 		dirty:    true,
 		stripped: p.stripped,
 		tinfo:    p.tinfo,
@@ -323,7 +340,10 @@ func (p *Package) Clone(copydata bool, sz int) *Package {
 
 	for i, b := range p.blocks {
 		np.blocks[i] = b.Clone(sz, copydata)
-		np.namemap[np.names[i]] = i
+	}
+
+	for n, v := range p.namemap {
+		np.namemap[n] = v
 	}
 
 	if copydata {
@@ -868,7 +888,7 @@ func (p *Package) IsZeroAt(index, pos int, zeroIsNull bool) bool {
 		val := p.blocks[index].Timestamps[pos]
 		return val == 0 || (zeroIsNull && time.Unix(0, val).IsZero())
 	case BlockBool:
-		return false
+		return zeroIsNull && !p.blocks[index].Bools[pos]
 	case BlockFloat:
 		v := p.blocks[index].Floats[pos]
 		return math.IsNaN(v) || math.IsInf(v, 0) || (zeroIsNull && v == 0.0)
@@ -877,7 +897,7 @@ func (p *Package) IsZeroAt(index, pos int, zeroIsNull bool) bool {
 	case BlockUnsigned:
 		return zeroIsNull && p.blocks[index].Unsigneds[pos] == 0
 	}
-	return true
+	return false
 }
 
 func (p *Package) Column(index int) (interface{}, error) {
@@ -1053,7 +1073,7 @@ func (p *Package) AppendFrom(src *Package, srcPos, srcLen int, safecopy bool) er
 	if src.nValues < srcPos+srcLen {
 		return fmt.Errorf("pack: invalid source pack offset %d len %d (max %d)", srcPos, srcLen, src.nValues)
 	}
-	for i, _ := range p.blocks {
+	for i := range p.blocks {
 		switch src.blocks[i].Type {
 		case BlockInteger:
 			p.blocks[i].Integers = append(p.blocks[i].Integers, src.blocks[i].Integers[srcPos:srcPos+srcLen]...)
@@ -1193,8 +1213,8 @@ func (p *Package) Delete(pos, n int) error {
 }
 
 func (p *Package) Clear() {
-	for _, v := range p.blocks {
-		v.Clear()
+	for i := range p.blocks {
+		p.blocks[i].Clear()
 	}
 	p.version = packageStorageFormatVersionV1
 	p.nValues = 0
@@ -1207,9 +1227,10 @@ func (p *Package) Clear() {
 }
 
 func (p *Package) Release() {
-	for _, v := range p.blocks {
-		v.Release()
+	for i := range p.blocks {
+		p.blocks[i].Release()
 	}
+	p.key = 0
 	p.version = 0
 	p.nFields = 0
 	p.nValues = 0
@@ -1217,7 +1238,6 @@ func (p *Package) Release() {
 	p.names = nil
 	p.blocks = nil
 	p.namemap = nil
-	p.key = nil
 	p.tinfo = nil
 	p.pkindex = -1
 	p.pkmap = nil

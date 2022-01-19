@@ -1,10 +1,11 @@
-// Copyright (c) 2018-2020 Blockwatch Data Inc.
+// Copyright (c) 2018-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package pack
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"strconv"
@@ -36,7 +37,7 @@ func (t *Table) DumpType(w io.Writer) error {
 	return t.journal.DataPack().DumpType(w)
 }
 
-func (t *Table) DumpPackHeaders(w io.Writer, mode DumpMode) error {
+func (t *Table) DumpPackInfo(w io.Writer, mode DumpMode, sorted bool) error {
 	tx, err := t.db.Tx(false)
 	if err != nil {
 		return err
@@ -53,7 +54,12 @@ func (t *Table) DumpPackHeaders(w io.Writer, mode DumpMode) error {
 		case DumpModeDec, DumpModeHex:
 			fmt.Fprintf(w, "%-3d ", i)
 		}
-		if err := t.packs.heads[i].Dump(w, mode); err != nil {
+		if sorted {
+			err = t.packs.GetSorted(i).Dump(w, mode, len(t.fields))
+		} else {
+			err = t.packs.Get(i).Dump(w, mode, len(t.fields))
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -62,7 +68,9 @@ func (t *Table) DumpPackHeaders(w io.Writer, mode DumpMode) error {
 		fmt.Fprintf(w, "%-3d ", i)
 		i++
 	}
-	if err := t.journal.DataPack().Header().Dump(w, mode); err != nil {
+	info := t.journal.DataPack().Info()
+	info.UpdateStats(t.journal.DataPack())
+	if err := info.Dump(w, mode, len(t.fields)); err != nil {
 		return err
 	}
 	return nil
@@ -87,6 +95,9 @@ func (t *Table) DumpJournal(w io.Writer, mode DumpMode) error {
 		w.Write([]byte(","))
 	}
 	w.Write([]byte("\n"))
+	w.Write([]byte("dbits:"))
+	w.Write([]byte(hex.EncodeToString(t.journal.deleted.Bytes())))
+	w.Write([]byte("\n"))
 	return nil
 }
 
@@ -99,11 +110,53 @@ func (t *Table) DumpPack(w io.Writer, i int, mode DumpMode) error {
 		return err
 	}
 	defer tx.Rollback()
-	pkg, err := t.loadSharedPack(tx, t.packs.heads[i].Key, false, nil)
+	pkg, err := t.loadSharedPack(tx, t.packs.Get(i).Key, false, nil)
 	if err != nil {
 		return err
 	}
 	return pkg.DumpData(w, mode, t.fields.Aliases())
+}
+
+func (t *Table) WalkPacks(fn func(*Package) error) error {
+	tx, err := t.db.Tx(false)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i := 0; i < t.packs.Len(); i++ {
+		pkg, err := t.loadSharedPack(tx, t.packs.Get(i).Key, false, nil)
+		if err != nil {
+			return err
+		}
+		if err := fn(pkg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Table) WalkPacksRange(start, end int, fn func(*Package) error) error {
+	tx, err := t.db.Tx(false)
+	if err != nil {
+		return err
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end < 0 {
+		end = t.packs.Len() - 1
+	}
+	defer tx.Rollback()
+	for i := start; i <= end && i < t.packs.Len(); i++ {
+		pkg, err := t.loadSharedPack(tx, t.packs.Get(i).Key, false, nil)
+		if err != nil {
+			return err
+		}
+		if err := fn(pkg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (t *Table) DumpIndexPack(w io.Writer, i, p int, mode DumpMode) error {
@@ -118,7 +171,7 @@ func (t *Table) DumpIndexPack(w io.Writer, i, p int, mode DumpMode) error {
 		return err
 	}
 	defer tx.Rollback()
-	pkg, err := t.indexes[i].loadSharedPack(tx, t.indexes[i].packs.heads[p].Key, false)
+	pkg, err := t.indexes[i].loadSharedPack(tx, t.indexes[i].packs.Get(p).Key, false)
 	if err != nil {
 		return err
 	}
@@ -138,7 +191,7 @@ func (t *Table) DumpPackBlocks(w io.Writer, mode DumpMode) error {
 	}
 	lineNo := 1
 	for i := 0; i < t.packs.Len(); i++ {
-		pkg, err := t.loadSharedPack(tx, t.packs.heads[i].Key, false, nil)
+		pkg, err := t.loadSharedPack(tx, t.packs.Get(i).Key, false, nil)
 		if err != nil {
 			return err
 		}
@@ -151,33 +204,51 @@ func (t *Table) DumpPackBlocks(w io.Writer, mode DumpMode) error {
 	return nil
 }
 
-func (t *Table) DumpIndexPackHeaders(w io.Writer, mode DumpMode) error {
+func (t *Table) DumpIndexPackInfo(w io.Writer, mode DumpMode, sorted bool) error {
 	tx, err := t.db.Tx(false)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	for _, v := range t.indexes {
-		if err := v.dumpPackHeaders(tx, w, mode); err != nil {
+		if err := v.dumpPackInfo(tx, w, mode, sorted); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (idx *Index) dumpPackHeaders(tx *Tx, w io.Writer, mode DumpMode) error {
+func (idx *Index) dumpPackInfo(tx *Tx, w io.Writer, mode DumpMode, sorted bool) error {
+	min, max := idx.packs.GlobalMinMax()
+	fmt.Fprintf(w, "Num Packs  %d\n", idx.packs.Len())
+	fmt.Fprintf(w, "Num Tuples %d\n", idx.packs.Count())
+	fmt.Fprintf(w, "Global     min=%d max=%d\n", min, max)
+	fmt.Fprintf(w, "Heap Size  %d\n", idx.packs.HeapSize())
+	fmt.Fprintf(w, "Table Size %d\n", idx.packs.TableSize())
+	smin, smax := idx.packs.MinMaxSlices()
+	fmt.Fprintf(w, "Mins       %#v\n", smin)
+	fmt.Fprintf(w, "Maxs       %#v\n", smax)
+
 	switch mode {
 	case DumpModeDec, DumpModeHex:
 		fmt.Fprintf(w, "%-3s %-10s %-7s %-7s %-21s %-21s %-10s\n",
 			"#", "Key", "Fields", "Values", "Min", "Max", "Size")
 	}
-	var i int
+	var (
+		i   int
+		err error
+	)
 	for i = 0; i < idx.packs.Len(); i++ {
 		switch mode {
 		case DumpModeDec, DumpModeHex:
 			fmt.Fprintf(w, "%-3d ", i)
 		}
-		if err := idx.packs.heads[i].Dump(w, mode); err != nil {
+		if sorted {
+			err = idx.packs.GetSorted(i).Dump(w, mode, 2)
+		} else {
+			err = idx.packs.Get(i).Dump(w, mode, 2)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -186,7 +257,9 @@ func (idx *Index) dumpPackHeaders(tx *Tx, w io.Writer, mode DumpMode) error {
 		fmt.Fprintf(w, "%-3d ", i)
 		i++
 	}
-	if err := idx.journal.Header().Dump(w, mode); err != nil {
+	info := idx.journal.Info()
+	info.UpdateStats(idx.journal)
+	if err := info.Dump(w, mode, 2); err != nil {
 		return err
 	}
 	switch mode {
@@ -194,39 +267,41 @@ func (idx *Index) dumpPackHeaders(tx *Tx, w io.Writer, mode DumpMode) error {
 		fmt.Fprintf(w, "%-3d ", i)
 		i++
 	}
-	return idx.tombstone.Header().Dump(w, mode)
+	info = idx.tombstone.Info()
+	info.UpdateStats(idx.tombstone)
+	return info.Dump(w, mode, 2)
 }
 
-func (h PackageHeader) Dump(w io.Writer, mode DumpMode) error {
+func (h PackInfo) Dump(w io.Writer, mode DumpMode, nfields int) error {
 	var key string
 	switch true {
-	case bytes.Compare(h.Key, journalKey) == 0:
-		key = string(h.Key)
-	case bytes.Compare(h.Key, tombstoneKey) == 0:
-		key = string(h.Key)
+	case h.Key == journalKey:
+		key = "journal"
+	case h.Key == tombstoneKey:
+		key = "tombstone"
 	default:
-		key = util.ToString(h.Key)
+		key = util.ToString(h.EncodedKey())
 	}
-	head := h.BlockHeaders[0]
+	head := h.Blocks[0]
 	min, max := head.MinValue.(uint64), head.MaxValue.(uint64)
 	switch mode {
 	case DumpModeDec:
 		_, err := fmt.Fprintf(w, "%-10s %-7d %-7d %-21d %-21d %-10s\n",
 			key,
-			h.NFields,
+			nfields,
 			h.NValues,
 			min,
 			max,
-			util.ByteSize(h.PackSize))
+			util.ByteSize(h.Packsize))
 		return err
 	case DumpModeHex:
 		_, err := fmt.Fprintf(w, "%-10s %-7d %-7d %21x %21x %-10s\n",
 			key,
-			h.NFields,
+			nfields,
 			h.NValues,
 			min,
 			max,
-			util.ByteSize(h.PackSize))
+			util.ByteSize(h.Packsize))
 		return err
 	case DumpModeCSV:
 		enc, ok := w.(*csv.Encoder)
@@ -235,11 +310,11 @@ func (h PackageHeader) Dump(w io.Writer, mode DumpMode) error {
 		}
 		ch := CSVHeader{
 			Key:   key,
-			Cols:  h.NFields,
+			Cols:  nfields,
 			Rows:  h.NValues,
 			MinPk: min,
 			MaxPk: max,
-			Size:  h.PackSize,
+			Size:  h.Packsize,
 		}
 		return enc.EncodeRecord(ch)
 	}
@@ -253,10 +328,10 @@ func (p *Package) DumpType(w io.Writer) error {
 	}
 	var key string
 	switch true {
-	case bytes.Compare(p.key, journalKey) == 0:
-		key = string(p.key)
-	case bytes.Compare(p.key, tombstoneKey) == 0:
-		key = string(p.key)
+	case p.key == journalKey:
+		key = "journal"
+	case p.key == tombstoneKey:
+		key = "tombstone"
 	default:
 		key = util.ToString(p.key)
 	}
@@ -305,10 +380,10 @@ func (p *Package) DumpType(w io.Writer) error {
 func (p *Package) DumpBlocks(w io.Writer, mode DumpMode, lineNo int) (int, error) {
 	var key string
 	switch true {
-	case bytes.Compare(p.key, journalKey) == 0:
-		key = string(p.key)
-	case bytes.Compare(p.key, tombstoneKey) == 0:
-		key = string(p.key)
+	case p.key == journalKey:
+		key = "journal"
+	case p.key == tombstoneKey:
+		key = "tombstone"
 	default:
 		key = util.ToString(p.key)
 	}
@@ -544,4 +619,75 @@ func (r Result) Dump() string {
 			v.Index, v.Name, v.Alias, v.Type, v.Precision, v.Flags)
 	}
 	return buf.String()
+}
+
+func (l PackIndex) Validate() []error {
+	errs := make([]error, 0)
+	for i := range l.packs {
+		head := l.packs[i]
+		if head.NValues == 0 {
+			errs = append(errs, fmt.Errorf("%03d empty pack", head.Key))
+		}
+		// check min <= max
+		min, max := l.minpks[i], l.maxpks[i]
+		if min > max {
+			errs = append(errs, fmt.Errorf("%03d min %d > max %d", head.Key, min, max))
+		}
+		// check invariant
+		// - id's don't overlap between packs
+		// - same key can span many packs, so min_a == max_b
+		// - for long rows of same keys min_a == max_a
+		for j := range l.packs {
+			if i == j {
+				continue
+			}
+			jmin, jmax := l.minpks[j], l.maxpks[j]
+			dist := jmax - jmin + 1
+
+			// single key packs are allowed
+			if min == max {
+				// check the signle key is not between any other pack (exclusing)
+				if jmin < min && jmax > max {
+					errs = append(errs, fmt.Errorf("%03d overlaps %03d - key %d E [%d:%d]",
+						head.Key, l.packs[j].Key, min, jmin, jmax))
+				}
+			} else {
+				// check min val is not contained in any other pack unless continued
+				if min != jmin && min != jmax && min-jmin < dist {
+					errs = append(errs, fmt.Errorf("%03d overlaps %03d - min %d E [%d:%d]",
+						head.Key, l.packs[j].Key, min, jmin, jmax))
+				}
+
+				// check max val is not contained in any other pack unless continued
+				if max != jmin && max-jmin < dist {
+					errs = append(errs, fmt.Errorf("%03d overlaps %03d - max %d E [%d:%d]",
+						head.Key, l.packs[j].Key, max, jmin, jmax))
+				}
+			}
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
+}
+
+func (t *Table) ValidatePackIndex(w io.Writer) error {
+	if errs := t.packs.Validate(); errs != nil {
+		for _, v := range errs {
+			w.Write([]byte(v.Error() + "\n"))
+		}
+	}
+	return nil
+}
+
+func (t *Table) ValidateIndexPackIndex(w io.Writer) error {
+	for _, idx := range t.indexes {
+		if errs := idx.packs.Validate(); errs != nil {
+			for _, v := range errs {
+				w.Write([]byte(fmt.Sprintf("%s: %v\n", idx.Name, v.Error())))
+			}
+		}
+	}
+	return nil
 }

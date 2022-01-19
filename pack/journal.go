@@ -80,7 +80,7 @@ func (j *Journal) Close() {
 
 func (j *Journal) LoadLegacy(dbTx store.Tx, bucketName []byte) error {
 	j.Reset()
-	if _, err := loadPackTx(dbTx, bucketName, journalKey, j.data); err != nil {
+	if _, err := loadPackTx(dbTx, bucketName, encodePackKey(journalKey), j.data); err != nil {
 		return err
 	}
 	j.sortData = false
@@ -92,7 +92,7 @@ func (j *Journal) LoadLegacy(dbTx store.Tx, bucketName []byte) error {
 	if j.sortData {
 		sort.Sort(j.keys)
 	}
-	tomb, err := loadPackTx(dbTx, bucketName, tombstoneKey, nil)
+	tomb, err := loadPackTx(dbTx, bucketName, encodePackKey(tombstoneKey), nil)
 	if err != nil {
 		return fmt.Errorf("pack: cannot open tombstone for table %s: %v", string(bucketName), err)
 	}
@@ -132,7 +132,7 @@ func (j *Journal) StoreLegacy(dbTx store.Tx, bucketName []byte) (int, int, error
 		}
 		j.data.SetFieldAt(j.data.pkindex, idx, v)
 	}
-	n, err := storePackTx(dbTx, bucketName, journalKey, j.data, defaultJournalFillLevel)
+	n, err := storePackTx(dbTx, bucketName, encodePackKey(journalKey), j.data, defaultJournalFillLevel)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -143,7 +143,7 @@ func (j *Journal) StoreLegacy(dbTx store.Tx, bucketName []byte) (int, int, error
 		ts := Tombstone{v}
 		_ = tomb.Push(ts)
 	}
-	m, err := storePackTx(dbTx, bucketName, tombstoneKey, tomb, defaultJournalFillLevel)
+	m, err := storePackTx(dbTx, bucketName, encodePackKey(tombstoneKey), tomb, defaultJournalFillLevel)
 	if err != nil {
 		return n, 0, err
 	}

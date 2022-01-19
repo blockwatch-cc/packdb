@@ -124,6 +124,11 @@ func (q *Query) Compile(t *Table) error {
 		return err
 	}
 	q.compileTime = time.Since(q.lap)
+
+	log.Debug(newLogClosure(func() string {
+		return q.Dump()
+	}))
+
 	return nil
 }
 
@@ -177,6 +182,7 @@ func (q *Query) queryIndexNode(ctx context.Context, tx *Tx, node *ConditionTreeN
 			if !idx.Type.MayHaveCollisions() {
 				v.Cond.processed = true
 			}
+			log.Debugf("query: %s index scan found %d matches", q.Name, len(pkmatch))
 
 			if len(pkmatch) == 0 {
 				v.Cond.nomatch = true
@@ -211,6 +217,9 @@ func (q *Query) queryIndexNode(ctx context.Context, tx *Tx, node *ConditionTreeN
 			ins = append(ins, v)
 		}
 		node.Children = ins
+		log.Debug(newLogClosure(func() string {
+			return "Updated query:\n" + q.Dump()
+		}))
 	}
 
 	return nil
@@ -231,9 +240,9 @@ func (q *Query) QueryIndexes(ctx context.Context, tx *Tx) error {
 
 func (q *Query) MakePackSchedule(reverse bool) []int {
 	schedule := make([]int, 0, q.table.packs.Len())
-	for _, p := range q.table.packs.pairs {
-		if q.Conditions.MaybeMatchPack(q.table.packs.heads[p.pos]) {
-			schedule = append(schedule, p.pos)
+	for _, p := range q.table.packs.pos {
+		if q.Conditions.MaybeMatchPack(q.table.packs.packs[p]) {
+			schedule = append(schedule, int(p))
 		}
 	}
 	q.packsScheduled = len(schedule)

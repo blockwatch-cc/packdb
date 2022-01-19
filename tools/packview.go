@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2020 Blockwatch Data Inc.
+// Copyright (c) 2018-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 // packed index generation test
@@ -30,10 +30,12 @@ var (
 	debug     bool
 	trace     bool
 	ashex     bool
+	sorted    bool
 	csvfile   string
 	dbname    string
 	cmd       string
 	packid    int
+	idxid     int
 	tablename string
 )
 
@@ -56,9 +58,11 @@ Available Commands:
   blocks      show pack block headers
   type        show type info (from journal pack)
   journal     dump journal contents
-  dump-all    dump full table contents
-  dump-pack   dump pack contents (use -pack <id> to select a pack, default 0)
-  dump-index  dump index pack contents (use -pack <id> to select a pack, default 0)
+  dump-table  dump full table contents
+  dump-index  dump full index contents
+  dump-tpack  dump pack contents (use -pack <id> to select a pack, default 0)
+  dump-ipack  dump index pack contents (use -pack <id> and -index <id>, default 0)
+  validate    cross-check pack index lists for table and indexes
 `
 
 func b(n int) string {
@@ -71,10 +75,12 @@ func init() {
 	flags.BoolVar(&debug, "vv", false, "enable debug mode")
 	flags.BoolVar(&trace, "vvv", false, "enable trace mode")
 	flags.BoolVar(&ashex, "hex", false, "hex output mode")
+	flags.BoolVar(&sorted, "sorted", false, "sort pack headers by min value")
 	flags.StringVar(&csvfile, "csv", "", "csv output `filename`")
 	flags.StringVar(&dbname, "db", "", "database")
 	flags.StringVar(&cmd, "cmd", "", "run `command`")
 	flags.IntVar(&packid, "pack", 0, "use pack `number`")
+	flags.IntVar(&idxid, "index", 0, "use index `number`")
 	flags.StringVar(&tablename, "table", "", "use table `name` (optional, for multi-table files)")
 }
 
@@ -153,6 +159,7 @@ func run() error {
 		fmt.Printf("db=%s\n", dbname)
 		fmt.Printf("cmd=%s\n", cmd)
 		fmt.Printf("pack=%d\n", packid)
+		fmt.Printf("index=%d\n", idxid)
 	}
 
 	if cmd == "" {
@@ -197,23 +204,42 @@ func run() error {
 	case "blocks":
 		return table.DumpPackBlocks(out, mode)
 	case "table":
-		return table.DumpPackHeaders(out, mode)
+		return table.DumpPackInfo(out, mode, sorted)
 	case "index":
-		return table.DumpIndexPackHeaders(out, mode)
-	case "dump-all":
-		return viewAllPacks(table, out, mode)
-	case "dump-pack":
-		return table.DumpPack(out, packid, mode)
+		return table.DumpIndexPackInfo(out, mode, sorted)
+	case "dump-table":
+		return viewAllTablePacks(table, out, mode)
 	case "dump-index":
-		return table.DumpIndexPack(out, 0, packid, mode)
+		return viewAllIndexPacks(table, idxid, out, mode)
+	case "dump-tpack":
+		return table.DumpPack(out, packid, mode)
+	case "dump-ipack":
+		return table.DumpIndexPack(out, idxid, packid, mode)
+	case "validate":
+		table.ValidatePackIndex(out)
+		table.ValidateIndexPackIndex(out)
+		return nil
 	default:
 		return fmt.Errorf("unsupported command %s", cmd)
 	}
 }
 
-func viewAllPacks(table *pack.Table, w io.Writer, mode pack.DumpMode) error {
+func viewAllTablePacks(table *pack.Table, w io.Writer, mode pack.DumpMode) error {
 	for i := 0; ; i++ {
 		err := table.DumpPack(w, i, mode)
+		if err != nil && err != pack.ErrPackNotFound {
+			return err
+		}
+		if err == pack.ErrPackNotFound {
+			break
+		}
+	}
+	return nil
+}
+
+func viewAllIndexPacks(table *pack.Table, idx int, w io.Writer, mode pack.DumpMode) error {
+	for i := 0; ; i++ {
+		err := table.DumpIndexPack(w, idx, i, mode)
 		if err != nil && err != pack.ErrPackNotFound {
 			return err
 		}

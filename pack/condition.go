@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2020 Blockwatch Data Inc.
+// Copyright (c) 2018-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 // TODO
@@ -9,11 +9,13 @@ package pack
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
 	"time"
 
+	"blockwatch.cc/packdb/filter/bloom"
 	"blockwatch.cc/packdb/util"
 	"blockwatch.cc/packdb/vec"
 	"github.com/cespare/xxhash"
@@ -41,6 +43,7 @@ type Condition struct {
 	int64map     map[int64]struct{}
 	uint64map    map[uint64]struct{}
 	numValues    int
+	bloomHashes  [][2]uint64
 }
 
 type UnboundCondition struct {
@@ -175,107 +178,65 @@ func (c *Condition) EnsureTypes() error {
 	return nil
 }
 
-func (c *Condition) Compile() (err error) {
-	if !c.Field.IsValid() {
-		err = fmt.Errorf("invalid field in cond %s", c.String())
+func (c *Condition) sortValueSlice() {
+	if c.IsSorted {
 		return
 	}
-	if err = c.EnsureTypes(); err != nil {
-		err = fmt.Errorf("%s cond %s: %v", c.Field.Name, c.String(), err)
-		return
-	}
-
-	if c.Value != nil {
-		c.numValues++
-	}
-	if c.From != nil {
-		c.numValues++
-	}
-	if c.To != nil {
-		c.numValues++
-	}
-
-	switch c.Mode {
-	case FilterModeIn, FilterModeNotIn:
-	default:
-		return
-	}
-
 	switch c.Field.Type {
 	case FieldTypeBytes:
 		if slice := c.Value.([][]byte); slice != nil {
 			c.numValues = len(slice)
-			if !c.IsSorted {
-				sort.Slice(slice, func(i, j int) bool {
-					return bytes.Compare(slice[i], slice[j]) < 0
-				})
-				c.IsSorted = true
-			}
+			sort.Slice(slice, func(i, j int) bool {
+				return bytes.Compare(slice[i], slice[j]) < 0
+			})
 		}
 	case FieldTypeString:
 		if slice := c.Value.([]string); slice != nil {
 			c.numValues = len(slice)
-			if !c.IsSorted {
-				sort.Slice(slice, func(i, j int) bool {
-					return slice[i] < slice[j]
-				})
-				c.IsSorted = true
-			}
+			sort.Slice(slice, func(i, j int) bool {
+				return slice[i] < slice[j]
+			})
 		}
 	case FieldTypeDatetime:
 		if slice := c.Value.([]time.Time); slice != nil {
 			c.numValues = len(slice)
-			if !c.IsSorted {
-				sort.Slice(slice, func(i, j int) bool {
-					return slice[i].Before(slice[j])
-				})
-				c.IsSorted = true
-			}
+			sort.Slice(slice, func(i, j int) bool {
+				return slice[i].Before(slice[j])
+			})
 		}
 	case FieldTypeBoolean:
 		if slice := c.Value.([]bool); slice != nil {
 			c.numValues = len(slice)
-			if !c.IsSorted {
-				sort.Slice(slice, func(i, j int) bool {
-					return !slice[i] && slice[j]
-				})
-				c.IsSorted = true
-			}
+			sort.Slice(slice, func(i, j int) bool {
+				return !slice[i] && slice[j]
+			})
 		}
 	case FieldTypeInt64:
 		if slice := c.Value.([]int64); slice != nil {
 			c.numValues = len(slice)
-			if !c.IsSorted {
-				sort.Slice(slice, func(i, j int) bool {
-					return slice[i] < slice[j]
-				})
-				c.IsSorted = true
-			}
+			sort.Slice(slice, func(i, j int) bool {
+				return slice[i] < slice[j]
+			})
 		}
 	case FieldTypeUint64:
 		if slice := c.Value.([]uint64); slice != nil {
 			c.numValues = len(slice)
-			if !c.IsSorted {
-				sort.Slice(slice, func(i, j int) bool {
-					return slice[i] < slice[j]
-				})
-				c.IsSorted = true
-			}
+			sort.Slice(slice, func(i, j int) bool {
+				return slice[i] < slice[j]
+			})
 		}
 	case FieldTypeFloat64:
 		if slice := c.Value.([]float64); slice != nil {
 			c.numValues = len(slice)
-			if !c.IsSorted {
-				sort.Slice(slice, func(i, j int) bool {
-					return slice[i] < slice[j]
-				})
-				c.IsSorted = true
-			}
+			sort.Slice(slice, func(i, j int) bool {
+				return slice[i] < slice[j]
+			})
 		}
 	}
+	c.IsSorted = true
+}
 
-	var vals [][]byte
-
+func (c *Condition) buildValueMap() {
 	switch c.Field.Type {
 	case FieldTypeInt64:
 		slice := c.Value.([]int64)
@@ -283,7 +244,6 @@ func (c *Condition) Compile() (err error) {
 		for _, v := range slice {
 			c.int64map[v] = struct{}{}
 		}
-		return
 	case FieldTypeUint64:
 		if c.Field.Flags&FlagPrimary == 0 {
 			slice := c.Value.([]uint64)
@@ -292,7 +252,12 @@ func (c *Condition) Compile() (err error) {
 				c.uint64map[v] = struct{}{}
 			}
 		}
-		return
+	}
+}
+
+func (c *Condition) buildHashMap() {
+	var vals [][]byte
+	switch c.Field.Type {
 	case FieldTypeBytes:
 		vals = c.Value.([][]byte)
 		if vals == nil {
@@ -337,32 +302,110 @@ func (c *Condition) Compile() (err error) {
 			c.hashmap[sum] = 0xFFFFFFFF
 		}
 	}
-	return
 }
 
-func (c Condition) MaybeMatchPack(head PackageHeader) bool {
-	min, max := head.BlockHeaders[c.Field.Index].MinValue, head.BlockHeaders[c.Field.Index].MaxValue
+func (c *Condition) buildBloomData() {
+	if !c.Field.Flags.Contains(FlagBloom) {
+		return
+	}
+	c.bloomHashes = make([][2]uint64, 0)
+	var buf [8]byte
+	switch c.Field.Type {
+	case FieldTypeBytes:
+		for _, val := range c.Value.([][]byte) {
+			c.bloomHashes = append(c.bloomHashes, bloom.Hash(val))
+		}
+	case FieldTypeString:
+		for _, val := range c.Value.([]string) {
+			c.bloomHashes = append(c.bloomHashes, bloom.Hash([]byte(val)))
+		}
+	case FieldTypeInt64:
+		for _, val := range c.Value.([]int64) {
+			bigEndian.PutUint64(buf[:], uint64(val))
+			c.bloomHashes = append(c.bloomHashes, bloom.Hash(buf[:]))
+		}
+	case FieldTypeUint64:
+		for _, val := range c.Value.([]uint64) {
+			bigEndian.PutUint64(buf[:], val)
+			c.bloomHashes = append(c.bloomHashes, bloom.Hash(buf[:]))
+		}
+	case FieldTypeFloat64:
+		for _, val := range c.Value.([]float64) {
+			bigEndian.PutUint64(buf[:], math.Float64bits(val))
+			c.bloomHashes = append(c.bloomHashes, bloom.Hash(buf[:]))
+		}
+	}
+}
+
+func (c *Condition) Compile() (err error) {
+	if !c.Field.IsValid() {
+		err = fmt.Errorf("invalid field in cond %s", c.String())
+		return
+	}
+	if err = c.EnsureTypes(); err != nil {
+		err = fmt.Errorf("%s cond %s: %v", c.Field.Name, c.String(), err)
+		return
+	}
+
+	if c.Value != nil {
+		c.numValues++
+	}
+	if c.From != nil {
+		c.numValues++
+	}
+	if c.To != nil {
+		c.numValues++
+	}
+
+	switch c.Mode {
+	case FilterModeIn, FilterModeNotIn:
+		c.sortValueSlice()
+		c.buildValueMap()
+		c.buildHashMap()
+		c.buildBloomData()
+	default:
+		if c.Field.Flags.Contains(FlagBloom) {
+			c.bloomHashes = [][2]uint64{bloom.Hash(c.Field.Type.Bytes(c.Value))}
+		}
+	}
+	return nil
+}
+
+func (c Condition) MaybeMatchPack(info PackInfo) bool {
+	idx := c.Field.Index
+	min := info.Blocks[idx].MinValue
+	max := info.Blocks[idx].MaxValue
+	filter := info.Blocks[idx].Bloom
+	typ := c.Field.Type
 	switch c.Mode {
 	case FilterModeEqual:
-		return c.Field.Type.Lte(min, c.Value) && c.Field.Type.Gte(max, c.Value)
+		res := typ.Between(c.Value, min, max)
+		if res && filter != nil {
+			return filter.ContainsHash(c.bloomHashes[0])
+		}
+		return res
 	case FilterModeNotEqual:
 		return true
 	case FilterModeRange:
-		return !(c.Field.Type.Lt(max, c.From) || c.Field.Type.Gt(min, c.To))
+		return !(typ.Lt(max, c.From) || typ.Gt(min, c.To))
 	case FilterModeIn:
-		return c.Field.Type.InBetween(c.Value, min, max)
+		res := typ.InBetween(c.Value, min, max)
+		if res && filter != nil {
+			return filter.ContainsAnyHash(c.bloomHashes)
+		}
+		return res
 	case FilterModeNotIn:
 		return true
 	case FilterModeRegexp:
 		return true
 	case FilterModeGt:
-		return c.Field.Type.Gt(min, c.Value) || c.Field.Type.Gt(max, c.Value)
+		return typ.Gt(min, c.Value) || typ.Gt(max, c.Value)
 	case FilterModeGte:
-		return c.Field.Type.Gte(min, c.Value) || c.Field.Type.Gte(max, c.Value)
+		return typ.Gte(min, c.Value) || typ.Gte(max, c.Value)
 	case FilterModeLt:
-		return c.Field.Type.Lt(min, c.Value) || c.Field.Type.Lt(max, c.Value)
+		return typ.Lt(min, c.Value) || typ.Lt(max, c.Value)
 	case FilterModeLte:
-		return c.Field.Type.Lte(min, c.Value) || c.Field.Type.Lte(max, c.Value)
+		return typ.Lte(min, c.Value) || typ.Lte(max, c.Value)
 	default:
 		return false
 	}
@@ -920,7 +963,7 @@ func (n ConditionTreeNode) Weight() int {
 	return w
 }
 
-func (n ConditionTreeNode) Cost(info PackageHeader) int {
+func (n ConditionTreeNode) Cost(info PackInfo) int {
 	return n.Weight() * info.NValues
 }
 
@@ -974,7 +1017,7 @@ func (n *ConditionTreeNode) AddNode(node ConditionTreeNode) {
 	}
 }
 
-func (n ConditionTreeNode) MaybeMatchPack(info PackageHeader) bool {
+func (n ConditionTreeNode) MaybeMatchPack(info PackInfo) bool {
 	if info.NValues == 0 {
 		return false
 	}
@@ -1007,7 +1050,7 @@ func (n ConditionTreeNode) MaybeMatchPack(info PackageHeader) bool {
 	return true
 }
 
-func (n ConditionTreeNode) MatchPack(pkg *Package, info PackageHeader) *vec.BitSet {
+func (n ConditionTreeNode) MatchPack(pkg *Package, info PackInfo) *vec.BitSet {
 	if n.Leaf() {
 		return n.Cond.MatchPack(pkg, nil)
 	}
@@ -1023,7 +1066,7 @@ func (n ConditionTreeNode) MatchPack(pkg *Package, info PackageHeader) *vec.BitS
 	}
 }
 
-func (n ConditionTreeNode) MatchPackAnd(pkg *Package, info PackageHeader) *vec.BitSet {
+func (n ConditionTreeNode) MatchPackAnd(pkg *Package, info PackInfo) *vec.BitSet {
 	bits := vec.NewBitSet(pkg.Len()).One()
 
 	for _, cn := range n.Children {
@@ -1032,8 +1075,8 @@ func (n ConditionTreeNode) MatchPackAnd(pkg *Package, info PackageHeader) *vec.B
 			b = cn.MatchPack(pkg, info)
 		} else {
 			c := cn.Cond
-			if !pkg.IsJournal() && len(info.BlockHeaders) > c.Field.Index {
-				min, max := info.BlockHeaders[c.Field.Index].MinValue, info.BlockHeaders[c.Field.Index].MaxValue
+			if !pkg.IsJournal() && len(info.Blocks) > c.Field.Index {
+				min, max := info.Blocks[c.Field.Index].MinValue, info.Blocks[c.Field.Index].MaxValue
 				switch c.Mode {
 				case FilterModeEqual:
 					if c.Field.Type.Equal(min, c.Value) && c.Field.Type.Equal(max, c.Value) {
@@ -1084,7 +1127,7 @@ func (n ConditionTreeNode) MatchPackAnd(pkg *Package, info PackageHeader) *vec.B
 	return bits
 }
 
-func (n ConditionTreeNode) MatchPackOr(pkg *Package, info PackageHeader) *vec.BitSet {
+func (n ConditionTreeNode) MatchPackOr(pkg *Package, info PackInfo) *vec.BitSet {
 	bits := vec.NewBitSet(pkg.Len())
 	for _, cn := range n.Children {
 		var b *vec.BitSet
@@ -1092,8 +1135,8 @@ func (n ConditionTreeNode) MatchPackOr(pkg *Package, info PackageHeader) *vec.Bi
 			b = cn.MatchPack(pkg, info)
 		} else {
 			c := cn.Cond
-			if !pkg.IsJournal() && len(info.BlockHeaders) > c.Field.Index {
-				min, max := info.BlockHeaders[c.Field.Index].MinValue, info.BlockHeaders[c.Field.Index].MaxValue
+			if !pkg.IsJournal() && len(info.Blocks) > c.Field.Index {
+				min, max := info.Blocks[c.Field.Index].MinValue, info.Blocks[c.Field.Index].MaxValue
 				skipEarly := false
 				switch c.Mode {
 				case FilterModeEqual:
