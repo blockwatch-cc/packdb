@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2020 Blockwatch Data Inc.
+// Copyright (c) 2018-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package block
@@ -183,14 +183,16 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 		Compression: b.Compression,
 		Precision:   b.Precision,
 		Flags:       b.Flags,
+		Dirty:       true,
 	}
+	n := b.Len()
 	switch cp.Type {
 	case BlockTime:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Timestamps = integerPool.Get().([]int64)[:sz]
+				cp.Timestamps = integerPool.Get().([]int64)[:n:sz]
 			} else {
-				cp.Timestamps = make([]int64, sz)
+				cp.Timestamps = make([]int64, n, sz)
 			}
 			copy(cp.Timestamps, b.Timestamps)
 			min, max := b.MinValue.(time.Time), b.MaxValue.(time.Time)
@@ -208,9 +210,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockFloat:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Floats = floatPool.Get().([]float64)[:sz]
+				cp.Floats = floatPool.Get().([]float64)[:n:sz]
 			} else {
-				cp.Floats = make([]float64, sz)
+				cp.Floats = make([]float64, n, sz)
 			}
 			copy(cp.Floats, b.Floats)
 			min, max := b.MinValue.(float64), b.MaxValue.(float64)
@@ -228,9 +230,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockInteger:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Integers = integerPool.Get().([]int64)[:sz]
+				cp.Integers = integerPool.Get().([]int64)[:n:sz]
 			} else {
-				cp.Integers = make([]int64, sz)
+				cp.Integers = make([]int64, n, sz)
 			}
 			copy(cp.Integers, b.Integers)
 			min, max := b.MinValue.(int64), b.MaxValue.(int64)
@@ -248,9 +250,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockUnsigned:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Unsigneds = unsignedPool.Get().([]uint64)[:sz]
+				cp.Unsigneds = unsignedPool.Get().([]uint64)[:n:sz]
 			} else {
-				cp.Unsigneds = make([]uint64, sz)
+				cp.Unsigneds = make([]uint64, n, sz)
 			}
 			copy(cp.Unsigneds, b.Unsigneds)
 			min, max := b.MinValue.(uint64), b.MaxValue.(uint64)
@@ -268,9 +270,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockBool:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Bools = boolPool.Get().([]bool)[:sz]
+				cp.Bools = boolPool.Get().([]bool)[:n:sz]
 			} else {
-				cp.Bools = make([]bool, sz)
+				cp.Bools = make([]bool, n, sz)
 			}
 			copy(cp.Bools, b.Bools)
 			min, max := b.MinValue.(bool), b.MaxValue.(bool)
@@ -289,9 +291,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockString:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Strings = stringPool.Get().([]string)[:sz]
+				cp.Strings = stringPool.Get().([]string)[:n:sz]
 			} else {
-				cp.Strings = make([]string, sz)
+				cp.Strings = make([]string, n, sz)
 			}
 			copy(cp.Strings, b.Strings)
 			min, max := b.MinValue.(string), b.MaxValue.(string)
@@ -309,9 +311,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockBytes:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Bytes = bytesPool.Get().([][]byte)[:sz]
+				cp.Bytes = bytesPool.Get().([][]byte)[:n:sz]
 			} else {
-				cp.Bytes = make([][]byte, sz)
+				cp.Bytes = make([][]byte, n, sz)
 			}
 			for i, v := range b.Bytes {
 				cp.Bytes[i] = make([]byte, len(v))

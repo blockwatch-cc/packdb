@@ -320,13 +320,11 @@ func (h *BlockHeader) Decode(buf *bytes.Buffer) error {
 	}
 
 	if h.Flags&BlockFlagBloom > 0 {
-		// filter size is cardinality rounded up to next pow-2 times scale factor
 		sz := h.Precision * int(pow2(int64(h.Cardinality)))
 		b := buf.Next(sz)
 		if len(b) < sz {
 			return fmt.Errorf("pack: reading bloom filter: %w", io.ErrShortBuffer)
 		}
-		// we use a fixed number of 4 hash locations
 		bCopy := make([]byte, sz)
 		copy(bCopy, b)
 		var err error
@@ -349,43 +347,22 @@ func (h *BlockHeader) EstimateCardinality(b *Block) {
 		return
 	}
 	filter := loglogbeta.NewFilterWithPrecision(12)
-	var buf [8]byte
 	switch h.Type {
 	case BlockBytes:
-		for i := range b.Bytes {
-			filter.Add(b.Bytes[i])
-		}
+		filter.AddByteSlice(b.Bytes)
 	case BlockString:
-		for i := range b.Strings {
-			filter.Add([]byte(b.Strings[i]))
-		}
+		filter.AddStringSlice(b.Strings)
 	case BlockTime:
-		for _, v := range b.Timestamps {
-			bigEndian.PutUint64(buf[:], uint64(v))
-			filter.Add(buf[:])
-		}
+		filter.AddInt64Slice(b.Timestamps)
 	case BlockBool:
-		if !h.MinValue.(bool) {
-			filter.Add([]byte{0})
-		}
-		if h.MaxValue.(bool) {
-			filter.Add([]byte{1})
-		}
+		// unsupported
+		return
 	case BlockInteger:
-		for _, v := range b.Integers {
-			bigEndian.PutUint64(buf[:], uint64(v))
-			filter.Add(buf[:])
-		}
+		filter.AddInt64Slice(b.Integers)
 	case BlockUnsigned:
-		for _, v := range b.Unsigneds {
-			bigEndian.PutUint64(buf[:], v)
-			filter.Add(buf[:])
-		}
+		filter.AddUint64Slice(b.Unsigneds)
 	case BlockFloat:
-		for _, v := range b.Floats {
-			bigEndian.PutUint64(buf[:], math.Float64bits(v))
-			filter.Add(buf[:])
-		}
+		filter.AddFloat64Slice(b.Floats)
 	}
 	h.Cardinality = util.Min(b.Len(), int(filter.Cardinality()))
 }
@@ -395,62 +372,23 @@ func (h *BlockHeader) BuildBloomFilter(b *Block) {
 		h.Precision = 1
 	}
 	h.EstimateCardinality(b)
-	if h.Cardinality <= 0 {
+	if h.Cardinality <= 0 || h.Type == BlockBool {
 		return
 	}
 	m := uint64(h.Cardinality * h.Precision * 8)
 	h.Bloom = bloom.NewFilter(m, 4)
-	var buf [8]byte
 	switch h.Type {
 	case BlockBytes:
-		for i := range b.Bytes {
-			h.Bloom.Add(b.Bytes[i])
-		}
+		h.Bloom.AddByteSlice(b.Bytes)
 	case BlockString:
-		for i := range b.Strings {
-			h.Bloom.Add([]byte(b.Strings[i]))
-		}
+		h.Bloom.AddStringSlice(b.Strings)
 	case BlockTime:
-		for _, v := range b.Timestamps {
-			bigEndian.PutUint64(buf[:], uint64(v))
-			h.Bloom.Add(buf[:])
-		}
-	case BlockBool:
-		var (
-			count int
-			last  bool
-		)
-		for _, v := range b.Bools {
-			if count == 2 {
-				break
-			}
-			if count > 0 && v == last {
-				continue
-			}
-			if v {
-				h.Bloom.Add([]byte{1})
-				count++
-				last = v
-			} else {
-				h.Bloom.Add([]byte{0})
-				count++
-				last = v
-			}
-		}
+		h.Bloom.AddInt64Slice(b.Timestamps)
 	case BlockInteger:
-		for _, v := range b.Integers {
-			bigEndian.PutUint64(buf[:], uint64(v))
-			h.Bloom.Add(buf[:])
-		}
+		h.Bloom.AddInt64Slice(b.Integers)
 	case BlockUnsigned:
-		for _, v := range b.Unsigneds {
-			bigEndian.PutUint64(buf[:], v)
-			h.Bloom.Add(buf[:])
-		}
+		h.Bloom.AddUint64Slice(b.Unsigneds)
 	case BlockFloat:
-		for _, v := range b.Floats {
-			bigEndian.PutUint64(buf[:], math.Float64bits(v))
-			h.Bloom.Add(buf[:])
-		}
+		h.Bloom.AddFloat64Slice(b.Floats)
 	}
 }
