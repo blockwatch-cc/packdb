@@ -1,6 +1,7 @@
 package loglogbeta
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"math/bits"
@@ -104,6 +105,42 @@ func (llb *LogLogBeta) AddHash(x uint64) {
 // Add inserts a value into the sketch
 func (llb *LogLogBeta) Add(value []byte) {
 	llb.AddHash(xxhash.Sum64(value))
+}
+
+func (llb *LogLogBeta) AddByteSlice(l [][]byte) {
+	for _, v := range l {
+		llb.AddHash(xxhash.Sum64(v))
+	}
+}
+
+func (llb *LogLogBeta) AddStringSlice(l []string) {
+	for _, v := range l {
+		llb.AddHash(xxhash.Sum64([]byte(v)))
+	}
+}
+
+func (llb *LogLogBeta) AddInt64Slice(l []int64) {
+	var buf [8]byte
+	for _, v := range l {
+		binary.BigEndian.PutUint64(buf[:], uint64(v))
+		llb.AddHash(xxhash.Sum64(buf[:]))
+	}
+}
+
+func (llb *LogLogBeta) AddUint64Slice(l []uint64) {
+	var buf [8]byte
+	for _, v := range l {
+		binary.BigEndian.PutUint64(buf[:], v)
+		llb.AddHash(xxhash.Sum64(buf[:]))
+	}
+}
+
+func (llb *LogLogBeta) AddFloat64Slice(l []float64) {
+	var buf [8]byte
+	for _, v := range l {
+		binary.BigEndian.PutUint64(buf[:], math.Float64bits(v))
+		llb.AddHash(xxhash.Sum64(buf[:]))
+	}
 }
 
 // Cardinality returns the number of unique elements added to the sketch
