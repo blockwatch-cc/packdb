@@ -561,14 +561,6 @@ func (t *Table) Stats() []TableStats {
 	s.TombstoneTuplesThreshold = int64(t.journal.maxsize)
 	s.TombstoneSize = s.TombstoneTuplesCount * 8
 
-	for _, v := range t.cache.Keys() {
-		val, ok := t.cache.Peek(v)
-		if !ok {
-			continue
-		}
-		s.PackCacheSize += int64(val.(*Package).HeapSize())
-	}
-
 	resp := []TableStats{s}
 	for _, idx := range t.indexes {
 		resp = append(resp, idx.Stats())
@@ -2671,6 +2663,8 @@ func (t *Table) onEvictedPackage(key, val interface{}) {
 	pkg := val.(*Package)
 	pkg.cached = false
 	atomic.AddInt64(&t.stats.PackCacheEvictions, 1)
+	atomic.AddInt64(&t.stats.PackCacheCount, -1)
+	atomic.AddInt64(&t.stats.PackCacheSize, int64(-pkg.HeapSize()))
 	t.recyclePackage(pkg)
 }
 

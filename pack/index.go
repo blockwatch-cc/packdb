@@ -1218,14 +1218,6 @@ func (idx *Index) Stats() TableStats {
 	s.TombstoneTuplesThreshold = int64(idx.opts.JournalSize())
 	s.TombstoneSize = int64(idx.tombstone.HeapSize())
 
-	for _, v := range idx.cache.Keys() {
-		val, ok := idx.cache.Peek(v)
-		if !ok {
-			continue
-		}
-		s.PackCacheSize += int64(val.(*Package).HeapSize())
-	}
-
 	return s
 }
 
