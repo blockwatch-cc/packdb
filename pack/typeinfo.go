@@ -196,7 +196,7 @@ func structFieldInfo(typ reflect.Type, f *reflect.StructField) (*fieldInfo, erro
 				}
 			case "bloom":
 				finfo.flags |= FlagBloom
-				finfo.precision = 1
+				finfo.precision = 2
 				if len(ff) > 1 {
 					factor, err := strconv.Atoi(ff[1])
 					if err != nil {

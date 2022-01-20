@@ -346,7 +346,7 @@ func (h *BlockHeader) EstimateCardinality(b *Block) {
 		h.Cardinality = 1
 		return
 	}
-	filter := loglogbeta.NewFilterWithPrecision(12)
+	filter := loglogbeta.NewFilterWithPrecision(16)
 	switch h.Type {
 	case BlockBytes:
 		filter.AddByteSlice(b.Bytes)
@@ -369,7 +369,7 @@ func (h *BlockHeader) EstimateCardinality(b *Block) {
 
 func (h *BlockHeader) BuildBloomFilter(b *Block) {
 	if h.Precision <= 0 {
-		h.Precision = 1
+		h.Precision = 2
 	}
 	h.EstimateCardinality(b)
 	if h.Cardinality <= 0 || h.Type == BlockBool {
