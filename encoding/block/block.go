@@ -632,8 +632,8 @@ func (b *Block) EncodeBody() ([]byte, error) {
 
 func (b *Block) EncodeHeader() ([]byte, error) {
 	buf := bytes.NewBuffer(BlockEncoderPool.Get().([]byte)[:0])
-	buf.WriteByte(byte(b.Type&0x1f) | byte(b.Compression&0x3)<<5 | 0x80)
-	buf.WriteByte((byte(b.Flags)&0xf)<<4 | byte(b.Precision)&0xf)
+	buf.WriteByte((byte(b.Type) & blockTypeMask) | (byte(b.Compression)&blockCompressionMask)<<5 | 0x80)
+	buf.WriteByte(((byte(b.Flags) & blockFlagMask) << 4) | (byte(b.Precision) & blockPrecisionMask))
 
 	switch b.Type {
 	case BlockTime:

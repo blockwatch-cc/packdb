@@ -22,7 +22,6 @@ const (
 	blockCompressionMask byte = 0x03
 	blockFlagMask        byte = 0x07
 	blockPrecisionMask   byte = 0x0f
-	blockFilterMask      byte = 0x03
 )
 
 type BlockHeader struct {
@@ -145,8 +144,8 @@ func (b *Block) MakeHeader() BlockHeader {
 }
 
 func (h BlockHeader) Encode(buf *bytes.Buffer) error {
-	buf.WriteByte(byte(h.Type)&blockTypeMask | (byte(h.Compression)&blockCompressionMask)<<5 | 0x80)
-	buf.WriteByte((byte(h.Flags)&blockFlagMask)<<4 | byte(h.Precision)&blockPrecisionMask)
+	buf.WriteByte((byte(h.Type) & blockTypeMask) | ((byte(h.Compression) & blockCompressionMask) << 5) | 0x80)
+	buf.WriteByte(((byte(h.Flags) & blockFlagMask) << 4) | (byte(h.Precision) & blockPrecisionMask))
 	var b [4]byte
 	bigEndian.PutUint32(b[0:], uint32(h.Cardinality))
 	_, _ = buf.Write(b[:])
@@ -224,6 +223,8 @@ func (h BlockHeader) Encode(buf *bytes.Buffer) error {
 	}
 
 	if h.Bloom != nil && h.Flags&BlockFlagBloom > 0 {
+		bigEndian.PutUint32(b[0:], uint32(h.Bloom.Len()))
+		_, _ = buf.Write(b[:])
 		buf.Write(h.Bloom.Bytes())
 	}
 
@@ -320,7 +321,7 @@ func (h *BlockHeader) Decode(buf *bytes.Buffer) error {
 	}
 
 	if h.Flags&BlockFlagBloom > 0 {
-		sz := h.Precision * int(pow2(int64(h.Cardinality)))
+		sz := int(bigEndian.Uint32(buf.Next(4)))
 		b := buf.Next(sz)
 		if len(b) < sz {
 			return fmt.Errorf("pack: reading bloom filter: %w", io.ErrShortBuffer)

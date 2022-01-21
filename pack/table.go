@@ -2542,10 +2542,13 @@ func (t *Table) loadSharedPack(tx *Tx, id uint32, touch bool, fields FieldList) 
 	}
 	atomic.AddInt64(&t.stats.PacksLoaded, 1)
 	atomic.AddInt64(&t.stats.PacksBytesRead, int64(pkg.packedsize))
-	pkg.SetKey(key)
 	pkg.tinfo = t.journal.data.tinfo
 	pkg.pkindex = t.fields.PkIndex()
 	pkg.cached = touch
+	// head := pkg.Info()
+	// log.Infof("%s: loaded read pack %d", t.Name(), head.Key)
+	// head.DumpDetail(log.Logger().Writer())
+
 	if touch {
 		updated, _ := t.cache.Add(cachekey, pkg)
 		if updated {
@@ -2567,6 +2570,9 @@ func (t *Table) loadWritablePack(tx *Tx, id uint32) (*Package, error) {
 		clone := pkg.Clone(true, t.opts.PackSize())
 		clone.key = pkg.key
 		clone.cached = false
+		// head := clone.Info()
+		// log.Infof("%s: cloned pack %d", t.Name(), head.Key)
+		// head.DumpDetail(log.Logger().Writer())
 		return clone, nil
 	}
 
@@ -2575,9 +2581,11 @@ func (t *Table) loadWritablePack(tx *Tx, id uint32) (*Package, error) {
 	if err != nil {
 		return nil, err
 	}
-	pkg.SetKey(key)
 	pkg.tinfo = t.journal.data.tinfo
 	pkg.pkindex = t.fields.PkIndex()
+	// head := pkg.Info()
+	// log.Infof("%s: loaded write pack %d", t.Name(), head.Key)
+	// head.DumpDetail(log.Logger().Writer())
 	atomic.AddInt64(&t.stats.PacksLoaded, 1)
 	atomic.AddInt64(&t.stats.PacksBytesRead, int64(pkg.packedsize))
 	return pkg, nil
@@ -2606,6 +2614,9 @@ func (t *Table) storePack(tx *Tx, pkg *Package) (int, error) {
 		if err = head.UpdateStats(pkg); err != nil {
 			return 0, err
 		}
+
+		// log.Infof("%s: store pack %d", t.Name(), head.Key)
+		// head.DumpDetail(log.Logger().Writer())
 
 		t.packs.AddOrUpdate(head)
 		atomic.AddInt64(&t.stats.PacksStored, 1)
