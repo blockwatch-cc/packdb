@@ -76,6 +76,31 @@ func (t *Table) DumpPackInfo(w io.Writer, mode DumpMode, sorted bool) error {
 	return nil
 }
 
+func (t *Table) DumpPackInfoDetail(w io.Writer, mode DumpMode, sorted bool) error {
+	switch mode {
+	case DumpModeDec, DumpModeHex:
+	default:
+		// unsupported
+		return nil
+	}
+	tx, err := t.db.Tx(false)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var i int
+	for i = 0; i < t.packs.Len(); i++ {
+		var info PackInfo
+		if sorted {
+			info = t.packs.GetSorted(i)
+		} else {
+			info = t.packs.Get(i)
+		}
+		info.DumpDetail(w)
+	}
+	return nil
+}
+
 func (t *Table) DumpJournal(w io.Writer, mode DumpMode) error {
 	err := t.journal.DataPack().DumpData(w, mode, t.fields.Aliases())
 	if err != nil {
@@ -317,6 +342,34 @@ func (h PackInfo) Dump(w io.Writer, mode DumpMode, nfields int) error {
 			Size:  h.Packsize,
 		}
 		return enc.EncodeRecord(ch)
+	}
+	return nil
+}
+
+func (i PackInfo) DumpDetail(w io.Writer) error {
+	fmt.Fprintf(w, "Pack Key   %08x ------------------------------------\n", i.Key)
+	fmt.Fprintf(w, "Values     %s\n", util.PrettyInt(i.NValues))
+	fmt.Fprintf(w, "Pack Size  %s\n", util.ByteSize(i.Packsize))
+	fmt.Fprintf(w, "Meta Size  %s\n", util.ByteSize(i.HeapSize()))
+	fmt.Fprintf(w, "Blocks     %d\n", len(i.Blocks))
+	fmt.Fprintf(w, "%-3s %-10s %-7s %-7s %-7s %-33s %-33s %-10s %-10s\n",
+		"#", "Type", "Comp", "Prec", "Card", "Min", "Max", "Bloom", "Flags")
+	for id, head := range i.Blocks {
+		var blen uint
+		if head.Bloom != nil {
+			blen = head.Bloom.Len()
+		}
+		fmt.Fprintf(w, "%-3d %-10s %-7s %-7d %-7d %-33s %-33s %-10d %-10s\n",
+			id,
+			head.Type,
+			head.Compression,
+			head.Precision,
+			head.Cardinality,
+			util.LimitStringEllipsis(util.ToString(head.MinValue), 33),
+			util.LimitStringEllipsis(util.ToString(head.MaxValue), 33),
+			blen,
+			head.Flags,
+		)
 	}
 	return nil
 }

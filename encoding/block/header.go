@@ -20,7 +20,7 @@ const (
 	blockHeaderVersion   byte = 2
 	blockTypeMask        byte = 0x1f
 	blockCompressionMask byte = 0x03
-	blockFlagMask        byte = 0x03
+	blockFlagMask        byte = 0x07
 	blockPrecisionMask   byte = 0x0f
 	blockFilterMask      byte = 0x03
 )

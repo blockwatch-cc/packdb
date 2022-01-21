@@ -55,6 +55,7 @@ var cmdinfo = `
 Available Commands:
   table       list all table packs
   index       list all index packs
+  detail      show pack info details (from metadata)
   blocks      show pack block headers
   type        show type info (from journal pack)
   journal     dump journal contents
@@ -207,6 +208,8 @@ func run() error {
 		return table.DumpPackInfo(out, mode, sorted)
 	case "index":
 		return table.DumpIndexPackInfo(out, mode, sorted)
+	case "detail":
+		return table.DumpPackInfoDetail(out, mode, sorted)
 	case "dump-table":
 		return viewAllTablePacks(table, out, mode)
 	case "dump-index":

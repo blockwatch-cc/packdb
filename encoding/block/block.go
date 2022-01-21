@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"blockwatch.cc/packdb/encoding/compress"
@@ -22,6 +23,20 @@ const (
 	BlockFlagCompress
 	BlockFlagBloom
 )
+
+func (f BlockFlags) String() string {
+	s := make([]string, 0)
+	if f&BlockFlagConvert > 0 {
+		s = append(s, "convert")
+	}
+	if f&BlockFlagCompress > 0 {
+		s = append(s, "compress")
+	}
+	if f&BlockFlagBloom > 0 {
+		s = append(s, "bloom")
+	}
+	return strings.Join(s, ",")
+}
 
 type Compression byte
 
@@ -691,34 +706,28 @@ func (b *Block) EncodeHeader() ([]byte, error) {
 
 func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 	val := buf.Next(1)
-	typ, err := readBlockType(val)
+	var err error
+	b.Type, err = readBlockType(val)
 	if err != nil {
 		return err
 	}
-	comp, err := readBlockCompression(val)
+	b.Compression, err = readBlockCompression(val)
 	if err != nil {
 		return err
 	}
-
-	var (
-		prec  int
-		flags BlockFlags
-	)
 
 	if val[0]&0x80 > 0 {
 		val = buf.Next(1)
-		prec = readBlockPrecision(val)
-		flags = readBlockFlags(val)
+		b.Precision = readBlockPrecision(val)
+		b.Flags = readBlockFlags(val)
 	}
 
-	switch typ {
+	switch b.Type {
 	case BlockTime:
 		v := buf.Next(16)
 		vmin := bigEndian.Uint64(v[0:])
 		vmax := bigEndian.Uint64(v[8:])
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			b.MinValue = time.Unix(0, int64(vmin)).UTC()
 			b.MaxValue = time.Unix(0, int64(vmax)).UTC()
 		}
@@ -726,8 +735,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 	case BlockFloat:
 		v := buf.Next(16)
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			b.MinValue = math.Float64frombits(bigEndian.Uint64(v[0:]))
 			b.MaxValue = math.Float64frombits(bigEndian.Uint64(v[8:]))
 		}
@@ -735,8 +742,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 	case BlockInteger:
 		v := buf.Next(16)
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			b.MinValue = int64(bigEndian.Uint64(v[0:]))
 			b.MaxValue = int64(bigEndian.Uint64(v[8:]))
 		}
@@ -744,10 +749,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 	case BlockUnsigned:
 		v := buf.Next(16)
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
-			b.Precision = prec
-			b.Flags = flags
 			b.MinValue = bigEndian.Uint64(v[0:])
 			b.MaxValue = bigEndian.Uint64(v[8:])
 		}
@@ -755,8 +756,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 	case BlockBool:
 		v := buf.Next(1)
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			b.MinValue = v[0]&1 > 0
 			b.MaxValue = v[0]&2 > 0
 		}
@@ -771,8 +770,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 			return fmt.Errorf("pack: reading max string block header: %v", err)
 		}
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			mincopy := min[:len(min)-1]
 			maxcopy := max[:len(max)-1]
 			b.MinValue = mincopy
@@ -792,8 +789,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 		max := buf.Next(int(length))
 
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			mincopy := make([]byte, len(min))
 			maxcopy := make([]byte, len(max))
 			copy(mincopy, min)
