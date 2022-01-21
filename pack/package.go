@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2020 Blockwatch Data Inc.
+// Copyright (c) 2018-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package pack
@@ -22,6 +22,7 @@ const (
 )
 
 type Package struct {
+	key        uint32
 	used       int64
 	version    byte
 	nFields    int
@@ -30,7 +31,6 @@ type Package struct {
 	names      []string
 	blocks     []*Block
 	namemap    map[string]int
-	key        []byte
 	tinfo      *typeInfo
 	pkindex    int
 	pkmap      map[uint64]int
@@ -41,16 +41,40 @@ type Package struct {
 	stripped   bool
 }
 
+func (p Package) IsJournal() bool {
+	return p.key == journalKey
+}
+
+func (p Package) IsTomb() bool {
+	return p.key == tombstoneKey
+}
+
 func (p *Package) Key() []byte {
-	return p.key
+	return encodePackKey(p.key)
 }
 
 func (p *Package) SetKey(key []byte) {
-	p.key = key
+	switch {
+	case bytes.Compare(key, []byte("_journal")) == 0:
+		p.key = journalKey
+	case bytes.Compare(key, []byte("_tombstone")) == 0:
+		p.key = tombstoneKey
+	default:
+		p.key = bigEndian.Uint32(key)
+	}
 }
 
-func (p *Package) IsJournal() bool {
-	return bytes.Compare(journalKey, p.key) == 0
+func encodePackKey(key uint32) []byte {
+	switch key {
+	case journalKey:
+		return []byte("_journal")
+	case tombstoneKey:
+		return []byte("_tombstone")
+	default:
+		var buf [4]byte
+		bigEndian.PutUint32(buf[:], key)
+		return buf[:]
+	}
 }
 
 func (p *Package) PkMap() map[uint64]int {
@@ -113,6 +137,9 @@ func (p *Package) Field(name string) Field {
 	case LZ4Compression:
 		flags = FlagCompressLZ4
 	}
+	if p.blocks[idx].Flags&BlockFlagBloom > 0 {
+		flags |= FlagBloom
+	}
 	return Field{
 		Index:     idx,
 		Name:      name,
@@ -120,6 +147,15 @@ func (p *Package) Field(name string) Field {
 		Flags:     flags,
 		Precision: p.blocks[idx].Precision,
 	}
+}
+
+func (p *Package) FieldById(idx int) Field {
+	for n, i := range p.namemap {
+		if idx == i {
+			return p.Field(n)
+		}
+	}
+	return Field{Index: -1}
 }
 
 func (p *Package) Contains(fields FieldList) bool {
@@ -174,77 +210,54 @@ func (p *Package) Init(v interface{}, sz int) error {
 		p.names[i] = finfo.name
 		p.namemap[finfo.name] = i
 		p.namemap[finfo.alias] = i
+		prec := finfo.precision
+		flags := finfo.flags.BlockFlags()
+		comp := finfo.flags.Compression()
+		var typ BlockType
 		switch f.Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			p.blocks[i] = NewBlock(BlockInteger, sz, finfo.flags.Compression(), 0, 0)
+			typ = BlockInteger
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			typ = BlockUnsigned
 			if finfo.flags&FlagConvert > 0 {
-				p.blocks[i] = NewBlock(
-					BlockUnsigned,
-					sz,
-					finfo.flags.Compression(),
-					finfo.precision,
-					BlockFlagCompress,
-				)
-			} else {
-				p.blocks[i] = NewBlock(BlockUnsigned, sz, finfo.flags.Compression(), 0, 0)
+				flags |= BlockFlagCompress
 			}
 		case reflect.Float32, reflect.Float64:
+			typ = BlockFloat
 			if finfo.flags&FlagConvert > 0 {
-				p.blocks[i] = NewBlock(
-					BlockUnsigned,
-					sz,
-					finfo.flags.Compression(),
-					finfo.precision,
-					BlockFlagConvert|BlockFlagCompress,
-				)
-			} else {
-				p.blocks[i] = NewBlock(
-					BlockFloat,
-					sz,
-					finfo.flags.Compression(),
-					finfo.precision,
-					0,
-				)
+				flags |= BlockFlagConvert | BlockFlagCompress
+				typ = BlockUnsigned
 			}
 		case reflect.String:
-			p.blocks[i] = NewBlock(BlockString, sz, finfo.flags.Compression(), 0, 0)
+			typ = BlockString
 		case reflect.Slice:
 			if f.CanInterface() && f.Type().Implements(binaryMarshalerType) {
-				p.blocks[i] = NewBlock(BlockBytes, sz, finfo.flags.Compression(), 0, 0)
-				break
-			}
-			if f.CanInterface() && f.Type().Implements(textMarshalerType) {
-				p.blocks[i] = NewBlock(BlockString, sz, finfo.flags.Compression(), 0, 0)
-				break
-			}
-			if f.CanInterface() && f.Type().Implements(stringerType) {
-				p.blocks[i] = NewBlock(BlockString, sz, finfo.flags.Compression(), 0, 0)
-				break
-			}
-			if f.Type() != byteSliceType {
+				typ = BlockBytes
+			} else if f.CanInterface() && (f.Type().Implements(textMarshalerType) || f.Type().Implements(stringerType)) {
+				typ = BlockString
+			} else if f.Type() != byteSliceType {
 				return fmt.Errorf("pack: unsupported slice type %s", f.Type().String())
 			}
-			p.blocks[i] = NewBlock(BlockBytes, sz, finfo.flags.Compression(), 0, 0)
 		case reflect.Bool:
-			p.blocks[i] = NewBlock(BlockBool, sz, finfo.flags.Compression(), 0, 0)
+			typ = BlockBool
 		case reflect.Struct:
 			if f.Type().String() == "time.Time" {
-				p.blocks[i] = NewBlock(BlockTime, sz, finfo.flags.Compression(), 0, 0)
+				typ = BlockTime
 			} else if f.CanInterface() && f.Type().Implements(binaryMarshalerType) {
-				p.blocks[i] = NewBlock(BlockBytes, sz, finfo.flags.Compression(), 0, 0)
+				typ = BlockBytes
 			} else {
 				return fmt.Errorf("pack: unsupported embedded struct type %s", f.Type().String())
 			}
 		case reflect.Array:
 			if f.CanInterface() && f.Type().Implements(binaryMarshalerType) {
-				p.blocks[i] = NewBlock(BlockBytes, sz, finfo.flags.Compression(), 0, 0)
-				break
+				typ = BlockBytes
+			} else {
+				return fmt.Errorf("pack: unsupported array type %s", f.Type().String())
 			}
-			return fmt.Errorf("pack: unsupported array type %s", f.Type().String())
 		default:
 			return fmt.Errorf("pack: unsupported type %s (%v)", f.Type().String(), f.Kind())
 		}
+		p.blocks[i] = NewBlock(typ, sz, comp, prec, flags)
 	}
 	return nil
 }
@@ -274,56 +287,44 @@ func (p *Package) InitFields(fields FieldList, sz int) error {
 		p.names[i] = field.Name
 		p.namemap[field.Name] = i
 		p.namemap[field.Alias] = i
+		prec := field.Precision
+		flags := field.Flags.BlockFlags()
+		comp := field.Flags.Compression()
+		var typ BlockType
 		switch field.Type {
 		case FieldTypeInt64:
-			p.blocks[i] = NewBlock(BlockInteger, sz, field.Flags.Compression(), 0, 0)
+			typ = BlockInteger
 		case FieldTypeUint64:
+			typ = BlockUnsigned
 			if field.Flags&FlagConvert > 0 {
-				p.blocks[i] = NewBlock(
-					BlockUnsigned,
-					sz,
-					field.Flags.Compression(),
-					field.Precision,
-					BlockFlagConvert|BlockFlagCompress,
-				)
-			} else {
-				p.blocks[i] = NewBlock(
-					BlockUnsigned,
-					sz,
-					field.Flags.Compression(),
-					0,
-					0,
-				)
+				flags |= BlockFlagConvert | BlockFlagCompress
 			}
 		case FieldTypeFloat64:
 			if field.Flags&FlagConvert > 0 {
-				p.blocks[i] = NewBlock(
-					BlockUnsigned,
-					sz,
-					field.Flags.Compression(),
-					field.Precision,
-					BlockFlagConvert|BlockFlagCompress,
-				)
+				typ = BlockUnsigned
+				flags |= BlockFlagConvert | BlockFlagCompress
 			} else {
-				p.blocks[i] = NewBlock(BlockFloat, sz, field.Flags.Compression(), 0, 0)
+				typ = BlockFloat
 			}
 		case FieldTypeString:
-			p.blocks[i] = NewBlock(BlockString, sz, field.Flags.Compression(), 0, 0)
+			typ = BlockString
 		case FieldTypeBytes:
-			p.blocks[i] = NewBlock(BlockBytes, sz, field.Flags.Compression(), 0, 0)
+			typ = BlockBytes
 		case FieldTypeBoolean:
-			p.blocks[i] = NewBlock(BlockBool, sz, field.Flags.Compression(), 0, 0)
+			typ = BlockBool
 		case FieldTypeDatetime:
-			p.blocks[i] = NewBlock(BlockTime, sz, field.Flags.Compression(), 0, 0)
+			typ = BlockTime
 		default:
 			return fmt.Errorf("pack: unsupported field type %s", field.Type)
 		}
+		p.blocks[i] = NewBlock(typ, sz, comp, prec, flags)
 	}
 	return nil
 }
 
 func (p *Package) Clone(copydata bool, sz int) *Package {
 	np := &Package{
+		key:      0,
 		version:  p.version,
 		nFields:  p.nFields,
 		nValues:  0,
@@ -331,7 +332,6 @@ func (p *Package) Clone(copydata bool, sz int) *Package {
 		names:    p.names,
 		namemap:  make(map[string]int),
 		blocks:   make([]*Block, p.nFields),
-		key:      nil,
 		dirty:    true,
 		stripped: p.stripped,
 		tinfo:    p.tinfo,
@@ -340,7 +340,10 @@ func (p *Package) Clone(copydata bool, sz int) *Package {
 
 	for i, b := range p.blocks {
 		np.blocks[i] = b.Clone(sz, copydata)
-		np.namemap[np.names[i]] = i
+	}
+
+	for n, v := range p.namemap {
+		np.namemap[n] = v
 	}
 
 	if copydata {
@@ -869,25 +872,32 @@ func (p *Package) TimeAt(index, pos int) (time.Time, error) {
 	return time.Unix(0, p.blocks[index].Timestamps[pos]).UTC(), nil
 }
 
-func (p *Package) IsZeroAt(index, pos int) bool {
+func (p *Package) IsZeroAt(index, pos int, zeroIsNull bool) bool {
 	if p.nFields <= index || p.nValues <= pos {
-		return false
+		return true
+	}
+	if p.blocks[index].Type == BlockIgnore {
+		return true
 	}
 	switch p.blocks[index].Type {
-	case BlockInteger, BlockUnsigned, BlockBool:
-		return false
-	case BlockFloat:
-		v := p.blocks[index].Floats[pos]
-		return math.IsNaN(v) || math.IsInf(v, 0)
-	case BlockString:
-		return len(p.blocks[index].Strings[pos]) == 0
 	case BlockBytes:
 		return len(p.blocks[index].Bytes[pos]) == 0
+	case BlockString:
+		return len(p.blocks[index].Strings[pos]) == 0
 	case BlockTime:
 		val := p.blocks[index].Timestamps[pos]
-		return val == 0 || time.Unix(0, val).IsZero()
+		return val == 0 || (zeroIsNull && time.Unix(0, val).IsZero())
+	case BlockBool:
+		return zeroIsNull && !p.blocks[index].Bools[pos]
+	case BlockFloat:
+		v := p.blocks[index].Floats[pos]
+		return math.IsNaN(v) || math.IsInf(v, 0) || (zeroIsNull && v == 0.0)
+	case BlockInteger:
+		return zeroIsNull && p.blocks[index].Integers[pos] == 0
+	case BlockUnsigned:
+		return zeroIsNull && p.blocks[index].Unsigneds[pos] == 0
 	}
-	return true
+	return false
 }
 
 func (p *Package) Column(index int) (interface{}, error) {
@@ -1063,7 +1073,7 @@ func (p *Package) AppendFrom(src *Package, srcPos, srcLen int, safecopy bool) er
 	if src.nValues < srcPos+srcLen {
 		return fmt.Errorf("pack: invalid source pack offset %d len %d (max %d)", srcPos, srcLen, src.nValues)
 	}
-	for i, _ := range p.blocks {
+	for i := range p.blocks {
 		switch src.blocks[i].Type {
 		case BlockInteger:
 			p.blocks[i].Integers = append(p.blocks[i].Integers, src.blocks[i].Integers[srcPos:srcPos+srcLen]...)
@@ -1203,8 +1213,8 @@ func (p *Package) Delete(pos, n int) error {
 }
 
 func (p *Package) Clear() {
-	for _, v := range p.blocks {
-		v.Clear()
+	for i := range p.blocks {
+		p.blocks[i].Clear()
 	}
 	p.version = packageStorageFormatVersionV1
 	p.nValues = 0
@@ -1217,9 +1227,10 @@ func (p *Package) Clear() {
 }
 
 func (p *Package) Release() {
-	for _, v := range p.blocks {
-		v.Release()
+	for i := range p.blocks {
+		p.blocks[i].Release()
 	}
+	p.key = 0
 	p.version = 0
 	p.nFields = 0
 	p.nValues = 0
@@ -1227,7 +1238,6 @@ func (p *Package) Release() {
 	p.names = nil
 	p.blocks = nil
 	p.namemap = nil
-	p.key = nil
 	p.tinfo = nil
 	p.pkindex = -1
 	p.pkmap = nil

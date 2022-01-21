@@ -7,11 +7,23 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"time"
+
+	"blockwatch.cc/packdb/filter/bloom"
+	"blockwatch.cc/packdb/filter/loglogbeta"
+	"blockwatch.cc/packdb/util"
 )
 
-const BlockHeaderVersion = byte(1)
+const (
+	blockHeaderVersion   byte = 2
+	blockTypeMask        byte = 0x1f
+	blockCompressionMask byte = 0x03
+	blockFlagMask        byte = 0x07
+	blockPrecisionMask   byte = 0x0f
+	blockFilterMask      byte = 0x03
+)
 
 type BlockHeader struct {
 	Type        BlockType
@@ -20,16 +32,31 @@ type BlockHeader struct {
 	Flags       BlockFlags
 	MinValue    interface{}
 	MaxValue    interface{}
+	Bloom       *bloom.Filter
+	Cardinality int
+	dirty       bool
 }
 
 func (h BlockHeader) IsValid() bool {
 	return h.Type != BlockIgnore && h.MinValue != nil && h.MaxValue != nil
 }
 
+func (h BlockHeader) IsDirty() bool {
+	return h.dirty
+}
+
+func (h BlockHeader) SetDirty() {
+	h.dirty = true
+}
+
+func (h BlockHeader) ResetDirty() {
+	h.dirty = false
+}
+
 type BlockHeaderList []BlockHeader
 
 func (h BlockHeaderList) Encode(buf *bytes.Buffer) error {
-	buf.WriteByte(BlockHeaderVersion)
+	buf.WriteByte(blockHeaderVersion)
 	var b [4]byte
 	binary.BigEndian.PutUint32(b[:], uint32(len(h)))
 	buf.Write(b[:])
@@ -47,7 +74,7 @@ func (h *BlockHeaderList) Decode(buf *bytes.Buffer) error {
 	}
 
 	b, _ := buf.ReadByte()
-	if b != BlockHeaderVersion {
+	if b != blockHeaderVersion {
 		return fmt.Errorf("pack: invalid block header list version %d", b)
 	}
 
@@ -61,7 +88,7 @@ func (h *BlockHeaderList) Decode(buf *bytes.Buffer) error {
 	return nil
 }
 
-func (b *Block) CloneHeader() BlockHeader {
+func (b *Block) MakeHeader() BlockHeader {
 	if b.MinValue == nil || b.MaxValue == nil {
 		return BlockHeader{}
 	}
@@ -70,6 +97,7 @@ func (b *Block) CloneHeader() BlockHeader {
 		Compression: b.Compression,
 		Precision:   b.Precision,
 		Flags:       b.Flags,
+		dirty:       true,
 	}
 	switch b.Type {
 	case BlockTime:
@@ -117,8 +145,12 @@ func (b *Block) CloneHeader() BlockHeader {
 }
 
 func (h BlockHeader) Encode(buf *bytes.Buffer) error {
-	buf.WriteByte(byte(h.Type&0x1f) | byte(h.Compression&0x3)<<5 | 0x80)
-	buf.WriteByte((byte(h.Flags)&0xf)<<4 | byte(h.Precision)&0xf)
+	buf.WriteByte(byte(h.Type)&blockTypeMask | (byte(h.Compression)&blockCompressionMask)<<5 | 0x80)
+	buf.WriteByte((byte(h.Flags)&blockFlagMask)<<4 | byte(h.Precision)&blockPrecisionMask)
+	var b [4]byte
+	bigEndian.PutUint32(b[0:], uint32(h.Cardinality))
+	_, _ = buf.Write(b[:])
+
 	switch h.Type {
 	case BlockTime:
 		var v [16]byte
@@ -190,6 +222,11 @@ func (h BlockHeader) Encode(buf *bytes.Buffer) error {
 	default:
 		return fmt.Errorf("pack: invalid data type %d", h.Type)
 	}
+
+	if h.Bloom != nil && h.Flags&BlockFlagBloom > 0 {
+		buf.Write(h.Bloom.Bytes())
+	}
+
 	return nil
 }
 
@@ -210,6 +247,8 @@ func (h *BlockHeader) Decode(buf *bytes.Buffer) error {
 		h.Precision = readBlockPrecision(val)
 		h.Flags = readBlockFlags(val)
 	}
+
+	h.Cardinality = int(bigEndian.Uint32(buf.Next(4)))
 
 	switch h.Type {
 	case BlockTime:
@@ -280,5 +319,76 @@ func (h *BlockHeader) Decode(buf *bytes.Buffer) error {
 		return fmt.Errorf("pack: invalid data type %d", h.Type)
 	}
 
+	if h.Flags&BlockFlagBloom > 0 {
+		sz := h.Precision * int(pow2(int64(h.Cardinality)))
+		b := buf.Next(sz)
+		if len(b) < sz {
+			return fmt.Errorf("pack: reading bloom filter: %w", io.ErrShortBuffer)
+		}
+		bCopy := make([]byte, sz)
+		copy(bCopy, b)
+		var err error
+		h.Bloom, err = bloom.NewFilterBuffer(bCopy, 4)
+		if err != nil {
+			return fmt.Errorf("pack: reading bloom filter: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func (h *BlockHeader) EstimateCardinality(b *Block) {
+	switch b.Len() {
+	case 0:
+		h.Cardinality = 0
+		return
+	case 1:
+		h.Cardinality = 1
+		return
+	}
+	filter := loglogbeta.NewFilterWithPrecision(16)
+	switch h.Type {
+	case BlockBytes:
+		filter.AddByteSlice(b.Bytes)
+	case BlockString:
+		filter.AddStringSlice(b.Strings)
+	case BlockTime:
+		filter.AddInt64Slice(b.Timestamps)
+	case BlockBool:
+		// unsupported
+		return
+	case BlockInteger:
+		filter.AddInt64Slice(b.Integers)
+	case BlockUnsigned:
+		filter.AddUint64Slice(b.Unsigneds)
+	case BlockFloat:
+		filter.AddFloat64Slice(b.Floats)
+	}
+	h.Cardinality = util.Min(b.Len(), int(filter.Cardinality()))
+}
+
+func (h *BlockHeader) BuildBloomFilter(b *Block) {
+	if h.Precision <= 0 {
+		h.Precision = 2
+	}
+	h.EstimateCardinality(b)
+	if h.Cardinality <= 0 || h.Type == BlockBool {
+		return
+	}
+	m := uint64(h.Cardinality * h.Precision * 8)
+	h.Bloom = bloom.NewFilter(m, 4)
+	switch h.Type {
+	case BlockBytes:
+		h.Bloom.AddByteSlice(b.Bytes)
+	case BlockString:
+		h.Bloom.AddStringSlice(b.Strings)
+	case BlockTime:
+		h.Bloom.AddInt64Slice(b.Timestamps)
+	case BlockInteger:
+		h.Bloom.AddInt64Slice(b.Integers)
+	case BlockUnsigned:
+		h.Bloom.AddUint64Slice(b.Unsigneds)
+	case BlockFloat:
+		h.Bloom.AddFloat64Slice(b.Floats)
+	}
 }

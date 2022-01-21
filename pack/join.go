@@ -533,7 +533,7 @@ func (j Join) Query(ctx context.Context, q Query) (*Result, error) {
 		// ------------------------------------------------------------
 		if havePostFilter {
 			// log.Debugf("join: filtering result with %d rows against %d conds", agg.Rows(), q.Conditions.Size())
-			bits := q.Conditions.MatchPack(agg.pkg, PackageHeader{})
+			bits := q.Conditions.MatchPack(agg.pkg, PackInfo{})
 			for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 				n := length
 				if q.Limit > 0 {

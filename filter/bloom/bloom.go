@@ -1,3 +1,6 @@
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
+// Original: InfluxData
+//
 package bloom
 
 // NOTE:
@@ -8,6 +11,7 @@ package bloom
 // This also optimizes the filter by always using a bitset size with a power of 2.
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 
@@ -47,6 +51,14 @@ func (f *Filter) K() uint64 { return f.k }
 // Bytes returns the underlying backing slice.
 func (f *Filter) Bytes() []byte { return f.b }
 
+// Reset all bits in the filter.
+func (f *Filter) Reset() {
+	f.b[0] = 0
+	for bp := 1; bp < len(f.b); bp *= 2 {
+		copy(f.b[bp:], f.b[:bp])
+	}
+}
+
 // Clone returns a copy of f.
 func (f *Filter) Clone() *Filter {
 	other := &Filter{k: f.k, b: make([]byte, len(f.b)), mask: f.mask}
@@ -54,12 +66,68 @@ func (f *Filter) Clone() *Filter {
 	return other
 }
 
-// Insert inserts data to the filter.
-func (f *Filter) Insert(v []byte) {
+// Add inserts data to the filter.
+func (f *Filter) Add(v []byte) {
 	h := f.hash(v)
 	for i := uint64(0); i < f.k; i++ {
 		loc := f.location(h, i)
 		f.b[loc>>3] |= 1 << (loc & 7)
+	}
+}
+
+func (f *Filter) AddByteSlice(l [][]byte) {
+	for _, v := range l {
+		h := Hash(v)
+		for i := uint64(0); i < f.k; i++ {
+			loc := f.location(h, i)
+			f.b[loc>>3] |= 1 << (loc & 7)
+		}
+	}
+}
+
+func (f *Filter) AddStringSlice(l []string) {
+	for _, v := range l {
+		h := Hash([]byte(v))
+		for i := uint64(0); i < f.k; i++ {
+			loc := f.location(h, i)
+			f.b[loc>>3] |= 1 << (loc & 7)
+		}
+	}
+}
+
+func (f *Filter) AddInt64Slice(l []int64) {
+	var buf [8]byte
+	for _, v := range l {
+		binary.BigEndian.PutUint64(buf[:], uint64(v))
+		h := Hash(buf[:])
+		for i := uint64(0); i < f.k; i++ {
+			loc := f.location(h, i)
+			f.b[loc>>3] |= 1 << (loc & 7)
+		}
+	}
+}
+
+func (f *Filter) AddUint64Slice(l []uint64) {
+	var buf [8]byte
+	for _, v := range l {
+		binary.BigEndian.PutUint64(buf[:], v)
+		h := Hash(buf[:])
+		for i := uint64(0); i < f.k; i++ {
+			loc := f.location(h, i)
+			f.b[loc>>3] |= 1 << (loc & 7)
+		}
+	}
+}
+
+func (f *Filter) AddFloat64Slice(l []float64) {
+	var buf [8]byte
+	for _, v := range l {
+		binary.BigEndian.PutUint64(buf[:], math.Float64bits(v))
+		h := Hash(buf[:])
+		for i := uint64(0); i < f.k; i++ {
+			loc := f.location(h, i)
+			f.b[loc>>3] |= 1 << (loc & 7)
+		}
 	}
 }
 
@@ -74,6 +142,34 @@ func (f *Filter) Contains(v []byte) bool {
 		}
 	}
 	return true
+}
+
+// ContainsHash returns true if the filter contains hash value h.
+// Returns false if the filter definitely does not contain h.
+func (f *Filter) ContainsHash(h [2]uint64) bool {
+	for i := uint64(0); i < f.k; i++ {
+		loc := f.location(h, i)
+		if f.b[loc>>3]&(1<<(loc&7)) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ContainsAnyHash returns true if the filter contains any hash value in l.
+// Returns false if the filter definitely does not contain any hash in l.
+func (f *Filter) ContainsAnyHash(l [][2]uint64) bool {
+hash_scan:
+	for _, h := range l {
+		for i := uint64(0); i < f.k; i++ {
+			loc := f.location(h, i)
+			if f.b[loc>>3]&(1<<(loc&7)) == 0 {
+				continue hash_scan
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // Merge performs an in-place union of other into f.
@@ -122,6 +218,19 @@ func Estimate(n uint64, p float64) (m uint64, k uint64) {
 	m = uint64(math.Ceil(-1 * float64(n) * math.Log(p) / math.Pow(math.Log(2), 2)))
 	k = uint64(math.Ceil(math.Log(2) * float64(m) / float64(n)))
 	return m, k
+}
+
+func Hash(data []byte) [2]uint64 {
+	v1 := xxhash.Sum64(data)
+	var v2 uint64
+	if l := len(data); l > 0 {
+		l = l - 1
+		b := data[l] // We'll put the original byte back.
+		data[l] = byte(0)
+		v2 = xxhash.Sum64(data)
+		data[l] = b
+	}
+	return [2]uint64{v1, v2}
 }
 
 // pow2 returns the number that is the next highest power of 2.

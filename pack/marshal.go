@@ -68,12 +68,12 @@ func (p *Package) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (p *Package) UnmarshalHeader(data []byte) (PackageHeader, error) {
+func (p *Package) UnmarshalHeader(data []byte) (PackInfo, error) {
 	buf := bytes.NewBuffer(data)
 	if err := p.unmarshalHeader(buf); err != nil {
-		return PackageHeader{}, err
+		return PackInfo{}, err
 	}
-	return p.Header(), nil
+	return p.Info(), nil
 }
 
 func (p *Package) unmarshalHeader(buf *bytes.Buffer) error {

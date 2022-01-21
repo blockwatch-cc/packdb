@@ -10,11 +10,24 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"blockwatch.cc/packdb/encoding/block"
+	"blockwatch.cc/packdb/filter/bloom"
 )
 
 const (
 	tagName  = "pack"
 	tagAlias = "json"
+)
+
+var (
+	szPackInfo    = int(reflect.TypeOf(PackInfo{}).Size())
+	szBlockInfo   = int(reflect.TypeOf(block.BlockHeader{}).Size())
+	szBloomFilter = int(reflect.TypeOf(bloom.Filter{}).Size())
+	szPackIndex   = int(reflect.TypeOf(PackIndex{}).Size())
+	szPackage     = int(reflect.TypeOf(Package{}).Size())
+	szField       = int(reflect.TypeOf(Field{}).Size())
+	szBlock       = int(reflect.TypeOf(block.Block{}).Size())
 )
 
 type typeInfo struct {
@@ -180,6 +193,19 @@ func structFieldInfo(typ reflect.Type, f *reflect.StructField) (*fieldInfo, erro
 						return nil, fmt.Errorf("pack: field precision '%d' out of bounds [0,15]", prec)
 					}
 					finfo.precision = prec
+				}
+			case "bloom":
+				finfo.flags |= FlagBloom
+				finfo.precision = 2
+				if len(ff) > 1 {
+					factor, err := strconv.Atoi(ff[1])
+					if err != nil {
+						return nil, fmt.Errorf("pack: invalid bloom filter factor %s on field '%s': %v", ff[1], tag, err)
+					}
+					if factor < 1 || factor > 4 {
+						return nil, fmt.Errorf("pack: out of bound bloom factor %d on field '%s', should be [1..4]", factor, tag)
+					}
+					finfo.precision = factor
 				}
 			}
 		}

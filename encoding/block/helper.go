@@ -56,3 +56,12 @@ func (n nopCloser) ReadFrom(r io.Reader) (int64, error) {
 func NopCloser(w io.Writer) io.WriteCloser {
 	return nopCloser{w}
 }
+
+func pow2(x int64) int64 {
+	for i := int64(1); i < 1<<62; i = i << 1 {
+		if i >= x {
+			return i
+		}
+	}
+	return 1
+}

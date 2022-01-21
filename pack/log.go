@@ -9,6 +9,8 @@ import (
 
 var log logpkg.Logger
 
+var levelDebug = logpkg.LevelDebug
+
 func init() {
 	DisableLog()
 }

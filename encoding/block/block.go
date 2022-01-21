@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2020 Blockwatch Data Inc.
+// Copyright (c) 2018-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package block
@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"blockwatch.cc/packdb/encoding/compress"
@@ -20,7 +21,22 @@ type BlockFlags byte
 const (
 	BlockFlagConvert BlockFlags = 1 << iota
 	BlockFlagCompress
+	BlockFlagBloom
 )
+
+func (f BlockFlags) String() string {
+	s := make([]string, 0)
+	if f&BlockFlagConvert > 0 {
+		s = append(s, "convert")
+	}
+	if f&BlockFlagCompress > 0 {
+		s = append(s, "compress")
+	}
+	if f&BlockFlagBloom > 0 {
+		s = append(s, "bloom")
+	}
+	return strings.Join(s, ",")
+}
 
 type Compression byte
 
@@ -182,14 +198,16 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 		Compression: b.Compression,
 		Precision:   b.Precision,
 		Flags:       b.Flags,
+		Dirty:       true,
 	}
+	n := b.Len()
 	switch cp.Type {
 	case BlockTime:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Timestamps = integerPool.Get().([]int64)[:sz]
+				cp.Timestamps = integerPool.Get().([]int64)[:n:sz]
 			} else {
-				cp.Timestamps = make([]int64, sz)
+				cp.Timestamps = make([]int64, n, sz)
 			}
 			copy(cp.Timestamps, b.Timestamps)
 			min, max := b.MinValue.(time.Time), b.MaxValue.(time.Time)
@@ -207,9 +225,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockFloat:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Floats = floatPool.Get().([]float64)[:sz]
+				cp.Floats = floatPool.Get().([]float64)[:n:sz]
 			} else {
-				cp.Floats = make([]float64, sz)
+				cp.Floats = make([]float64, n, sz)
 			}
 			copy(cp.Floats, b.Floats)
 			min, max := b.MinValue.(float64), b.MaxValue.(float64)
@@ -227,9 +245,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockInteger:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Integers = integerPool.Get().([]int64)[:sz]
+				cp.Integers = integerPool.Get().([]int64)[:n:sz]
 			} else {
-				cp.Integers = make([]int64, sz)
+				cp.Integers = make([]int64, n, sz)
 			}
 			copy(cp.Integers, b.Integers)
 			min, max := b.MinValue.(int64), b.MaxValue.(int64)
@@ -247,9 +265,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockUnsigned:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Unsigneds = unsignedPool.Get().([]uint64)[:sz]
+				cp.Unsigneds = unsignedPool.Get().([]uint64)[:n:sz]
 			} else {
-				cp.Unsigneds = make([]uint64, sz)
+				cp.Unsigneds = make([]uint64, n, sz)
 			}
 			copy(cp.Unsigneds, b.Unsigneds)
 			min, max := b.MinValue.(uint64), b.MaxValue.(uint64)
@@ -267,9 +285,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockBool:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Bools = boolPool.Get().([]bool)[:sz]
+				cp.Bools = boolPool.Get().([]bool)[:n:sz]
 			} else {
-				cp.Bools = make([]bool, sz)
+				cp.Bools = make([]bool, n, sz)
 			}
 			copy(cp.Bools, b.Bools)
 			min, max := b.MinValue.(bool), b.MaxValue.(bool)
@@ -288,9 +306,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockString:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Strings = stringPool.Get().([]string)[:sz]
+				cp.Strings = stringPool.Get().([]string)[:n:sz]
 			} else {
-				cp.Strings = make([]string, sz)
+				cp.Strings = make([]string, n, sz)
 			}
 			copy(cp.Strings, b.Strings)
 			min, max := b.MinValue.(string), b.MaxValue.(string)
@@ -308,9 +326,9 @@ func (b *Block) Clone(sz int, copydata bool) *Block {
 	case BlockBytes:
 		if copydata {
 			if sz <= DefaultMaxPointsPerBlock {
-				cp.Bytes = bytesPool.Get().([][]byte)[:sz]
+				cp.Bytes = bytesPool.Get().([][]byte)[:n:sz]
 			} else {
-				cp.Bytes = make([][]byte, sz)
+				cp.Bytes = make([][]byte, n, sz)
 			}
 			for i, v := range b.Bytes {
 				cp.Bytes[i] = make([]byte, len(v))
@@ -688,34 +706,28 @@ func (b *Block) EncodeHeader() ([]byte, error) {
 
 func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 	val := buf.Next(1)
-	typ, err := readBlockType(val)
+	var err error
+	b.Type, err = readBlockType(val)
 	if err != nil {
 		return err
 	}
-	comp, err := readBlockCompression(val)
+	b.Compression, err = readBlockCompression(val)
 	if err != nil {
 		return err
 	}
-
-	var (
-		prec  int
-		flags BlockFlags
-	)
 
 	if val[0]&0x80 > 0 {
 		val = buf.Next(1)
-		prec = readBlockPrecision(val)
-		flags = readBlockFlags(val)
+		b.Precision = readBlockPrecision(val)
+		b.Flags = readBlockFlags(val)
 	}
 
-	switch typ {
+	switch b.Type {
 	case BlockTime:
 		v := buf.Next(16)
 		vmin := bigEndian.Uint64(v[0:])
 		vmax := bigEndian.Uint64(v[8:])
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			b.MinValue = time.Unix(0, int64(vmin)).UTC()
 			b.MaxValue = time.Unix(0, int64(vmax)).UTC()
 		}
@@ -723,8 +735,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 	case BlockFloat:
 		v := buf.Next(16)
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			b.MinValue = math.Float64frombits(bigEndian.Uint64(v[0:]))
 			b.MaxValue = math.Float64frombits(bigEndian.Uint64(v[8:]))
 		}
@@ -732,8 +742,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 	case BlockInteger:
 		v := buf.Next(16)
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			b.MinValue = int64(bigEndian.Uint64(v[0:]))
 			b.MaxValue = int64(bigEndian.Uint64(v[8:]))
 		}
@@ -741,10 +749,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 	case BlockUnsigned:
 		v := buf.Next(16)
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
-			b.Precision = prec
-			b.Flags = flags
 			b.MinValue = bigEndian.Uint64(v[0:])
 			b.MaxValue = bigEndian.Uint64(v[8:])
 		}
@@ -752,8 +756,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 	case BlockBool:
 		v := buf.Next(1)
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			b.MinValue = v[0]&1 > 0
 			b.MaxValue = v[0]&2 > 0
 		}
@@ -768,8 +770,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 			return fmt.Errorf("pack: reading max string block header: %v", err)
 		}
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			mincopy := min[:len(min)-1]
 			maxcopy := max[:len(max)-1]
 			b.MinValue = mincopy
@@ -789,8 +789,6 @@ func (b *Block) DecodeHeader(buf *bytes.Buffer) error {
 		max := buf.Next(int(length))
 
 		if b.Type != BlockIgnore {
-			b.Type = typ
-			b.Compression = comp
 			mincopy := make([]byte, len(min))
 			maxcopy := make([]byte, len(max))
 			copy(mincopy, min)
