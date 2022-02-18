@@ -420,23 +420,22 @@ func (idx *Index) loadPackInfo(dbTx store.Tx) error {
 			return nil
 		}
 	}
-	log.Infof("pack: scanning headers for index %s...", idx.cachekey(nil))
+	log.Warnf("pack: %s index has corrupt or missing statistics! Re-scanning table. This may take some time...", idx.cachekey(nil))
 	c := dbTx.Bucket(idx.key).Cursor()
 	pkg := idx.journal.Clone(false, idx.opts.PackSize())
 	for ok := c.First(); ok; ok = c.Next() {
-		ph, err := pkg.UnmarshalHeader(c.Value())
+		err := pkg.UnmarshalBinary(c.Value())
 		if err != nil {
 			return fmt.Errorf("pack: cannot scan index pack %s: %v", idx.cachekey(c.Key()), err)
 		}
-		ph.dirty = true
 		pkg.SetKey(c.Key())
 		if pkg.IsJournal() || pkg.IsTomb() {
 			pkg.Clear()
 			continue
 		}
-		ph.Key = pkg.key
-		_ = ph.UpdateStats(pkg)
-		heads = append(heads, ph)
+		info := pkg.Info()
+		_ = info.UpdateStats(pkg)
+		heads = append(heads, info)
 		atomic.AddInt64(&idx.stats.MetaBytesRead, int64(len(c.Value())))
 		pkg.Clear()
 	}
@@ -444,16 +443,23 @@ func (idx *Index) loadPackInfo(dbTx store.Tx) error {
 	atomic.StoreInt64(&idx.stats.PacksCount, int64(idx.packs.Len()))
 	atomic.StoreInt64(&idx.stats.MetaSize, int64(idx.packs.HeapSize()))
 	atomic.StoreInt64(&idx.stats.PacksSize, int64(idx.packs.TableSize()))
-	log.Debugf("pack: %s index scanned %d package headers", idx.name(), idx.packs.Len())
+	log.Debugf("pack: %s index scanned %d packages", idx.name(), idx.packs.Len())
 	return nil
 }
 
 func (idx *Index) storePackInfo(dbTx store.Tx) error {
-	b := dbTx.Bucket(idx.metakey)
-	if b == nil {
+	meta := dbTx.Bucket(idx.metakey)
+	if meta == nil {
 		return ErrNoTable
 	}
-	hb := b.Bucket(headerKey)
+	hb := meta.Bucket(headerKey)
+	if hb == nil {
+		var err error
+		hb, err = meta.CreateBucketIfNotExists(headerKey)
+		if err != nil {
+			return err
+		}
+	}
 	for _, k := range idx.packs.removed {
 		hb.Delete(encodePackKey(k))
 	}
@@ -741,7 +747,7 @@ func (idx *Index) ReindexTx(ctx context.Context, tx *Tx, flushEvery int, ch chan
 }
 
 func (idx *Index) CloseTx(tx *Tx) error {
-	log.Debugf("pack: closing %s index %s with %d/%d records", idx.Type,
+	log.Debugf("pack: closing %s index %s with %d/%d pending journal records", idx.Type,
 		idx.cachekey(nil), idx.journal.Len(), idx.tombstone.Len())
 	_, err := tx.storePack(idx.metakey, encodePackKey(journalKey), idx.journal, idx.opts.FillLevel)
 	if err != nil {

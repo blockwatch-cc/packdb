@@ -428,12 +428,12 @@ func (d *DB) Table(name string, opts ...Options) (*Table, error) {
 }
 
 func (t *Table) loadPackInfo(dbTx store.Tx) error {
-	b := dbTx.Bucket(t.metakey)
-	if b == nil {
+	meta := dbTx.Bucket(t.metakey)
+	if meta == nil {
 		return ErrNoTable
 	}
 	heads := make(PackInfoList, 0)
-	bh := b.Bucket(headerKey)
+	bh := meta.Bucket(headerKey)
 	if bh != nil {
 		log.Debugf("pack: %s table loading package headers from bucket", t.name)
 		c := bh.Cursor()
@@ -459,18 +459,22 @@ func (t *Table) loadPackInfo(dbTx store.Tx) error {
 			return nil
 		}
 	}
-	log.Infof("pack: scanning headers for table %s...", t.name)
+	log.Warnf("pack: %s table has corrupt or missing statistics! Re-scanning table. This may take some time...", t.name)
 	c := dbTx.Bucket(t.key).Cursor()
 	pkg := t.journal.DataPack().Clone(false, t.opts.PackSize())
 	for ok := c.First(); ok; ok = c.Next() {
-		ph, err := pkg.UnmarshalHeader(c.Value())
+		err := pkg.UnmarshalBinary(c.Value())
 		if err != nil {
 			return fmt.Errorf("pack: cannot scan table pack %x: %v", c.Key(), err)
 		}
-		ph.dirty = true
 		pkg.SetKey(c.Key())
-		ph.Key = pkg.key
-		heads = append(heads, ph)
+		if pkg.IsJournal() || pkg.IsTomb() {
+			pkg.Clear()
+			continue
+		}
+		info := pkg.Info()
+		_ = info.UpdateStats(pkg)
+		heads = append(heads, info)
 		atomic.AddInt64(&t.stats.MetaBytesRead, int64(len(c.Value())))
 		pkg.Clear()
 	}
@@ -478,16 +482,23 @@ func (t *Table) loadPackInfo(dbTx store.Tx) error {
 	atomic.StoreInt64(&t.stats.PacksCount, int64(t.packs.Len()))
 	atomic.StoreInt64(&t.stats.MetaSize, int64(t.packs.HeapSize()))
 	atomic.StoreInt64(&t.stats.PacksSize, int64(t.packs.TableSize()))
-	log.Debugf("pack: %s table scanned %d package headers", t.name, t.packs.Len())
+	log.Debugf("pack: %s table scanned %d packages", t.name, t.packs.Len())
 	return nil
 }
 
 func (t *Table) storePackInfo(dbTx store.Tx) error {
-	b := dbTx.Bucket(t.metakey)
-	if b == nil {
+	meta := dbTx.Bucket(t.metakey)
+	if meta == nil {
 		return ErrNoTable
 	}
-	hb := b.Bucket(headerKey)
+	hb := meta.Bucket(headerKey)
+	if hb == nil {
+		var err error
+		hb, err = meta.CreateBucketIfNotExists(headerKey)
+		if err != nil {
+			return err
+		}
+	}
 	for _, v := range t.packs.removed {
 		log.Debugf("pack: %s table removing dead header %x", t.name, v)
 		hb.Delete(encodePackKey(v))
@@ -991,7 +1002,7 @@ func (t *Table) deleteJournal(ids []uint64) error {
 }
 
 func (t *Table) Close() error {
-	log.Debugf("pack: closing %s table with %d records", t.name, t.journal.Len())
+	log.Debugf("pack: closing %s table with %d pending journal records", t.name, t.journal.Len())
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -1035,6 +1046,7 @@ func (t *Table) Close() error {
 		return err
 	}
 	t.journal.Close()
+	delete(t.db.tables, t.name)
 	return nil
 }
 
