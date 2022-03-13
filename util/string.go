@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -74,6 +75,11 @@ func ToRawString(t interface{}) (string, error) {
 		return hex.EncodeToString(b), nil
 	}
 	return "", fmt.Errorf("no method for converting type %s (%v) to string", typ.String(), val.Kind())
+}
+
+func JsonString(v interface{}) string {
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 type StringList []string

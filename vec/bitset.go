@@ -335,3 +335,82 @@ func (s *BitSet) UnmarshalText(data []byte) error {
 	s.isReverse = false
 	return nil
 }
+
+// Replace replaces srcLen values at position dstPos with values from src
+// bewteen position srcPos and srcPos + srcLen.
+func (s *BitSet) Replace(src *BitSet, srcPos, srcLen, dstPos int) *BitSet {
+	// skip when arguments are out of range
+	if srcLen <= 0 || srcPos < 0 || dstPos < 0 || dstPos > s.size {
+		return s
+	}
+
+	// clamp srcLen
+	if srcLen > src.size-srcPos {
+		srcLen = src.size - srcPos
+	}
+	if srcLen > s.size-dstPos {
+		srcLen = s.size - dstPos
+	}
+
+	// replace
+	if srcPos&0x7+dstPos&0x7+srcLen&0x7 == 0 {
+		// fast path
+		copy(s.buf[dstPos>>3:], src.buf[srcPos>>3:(srcPos+srcLen)>>3])
+		s.cnt = -1
+	} else {
+		// slow path
+		for i, v := range src.SubSlice(srcPos, srcLen) {
+			if !v {
+				s.Clear(i + dstPos)
+			} else {
+				s.Set(i + dstPos)
+				if s.cnt >= 0 {
+					s.cnt++
+				}
+			}
+		}
+	}
+
+	return s
+}
+
+func (s BitSet) SubSlice(start, n int) []bool {
+	if start >= s.size {
+		return nil
+	}
+	if start < 0 {
+		start = 0
+	}
+	if n < 0 {
+		n = s.size - start
+	} else if start+n > s.size {
+		n = s.size - start
+	}
+	res := make([]bool, n)
+	var j int
+	// head
+	for i := start; i < start+n && i%8 > 0; i, j = i+1, j+1 {
+		res[j] = s.buf[i>>3]&bitmask(i) > 0
+	}
+	// fast inner loop
+	for i := start + j; i < (start+n) & ^0x7; i, j = i+8, j+8 {
+		b := s.buf[i>>3]
+		res[j] = b&0x01 > 0
+		res[j+1] = b&0x02 > 0
+		res[j+2] = b&0x04 > 0
+		res[j+3] = b&0x08 > 0
+		res[j+4] = b&0x10 > 0
+		res[j+5] = b&0x20 > 0
+		res[j+6] = b&0x40 > 0
+		res[j+7] = b&0x80 > 0
+	}
+	// tail
+	for i := start + j; i < start+n; i, j = i+1, j+1 {
+		res[j] = s.buf[i>>3]&bitmask(i) > 0
+	}
+	return res
+}
+
+func (s *BitSet) String() string {
+	return hex.EncodeToString(s.Bytes())
+}
