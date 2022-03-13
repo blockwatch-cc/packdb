@@ -1,9 +1,10 @@
-// Copyright (c) 2020 Blockwatch Data Inc.
+// Copyright (c) 2020-2022 Blockwatch Data Inc.
 // Author: alex@blockwatch.cc
 
 package vec
 
 import (
+	"encoding/hex"
 	"sync"
 )
 
@@ -303,4 +304,34 @@ func (s BitSet) Indexes(slice []int) []int {
 		j++
 	}
 	return slice
+}
+
+func (s BitSet) MarshalBinary() ([]byte, error) {
+	return s.Bytes(), nil
+}
+
+func (s *BitSet) UnmarshalBinary(data []byte) error {
+	s.buf = make([]byte, len(data))
+	copy(s.buf, data)
+	s.cnt = -1
+	s.size = len(data) * 8
+	s.isReverse = false
+	return nil
+}
+
+func (s BitSet) MarshalText() ([]byte, error) {
+	str := hex.EncodeToString(s.Bytes())
+	return []byte(str), nil
+}
+
+func (s *BitSet) UnmarshalText(data []byte) error {
+	buf, err := hex.DecodeString(string(data))
+	if err != nil {
+		return err
+	}
+	s.buf = buf
+	s.cnt = -1
+	s.size = len(buf) * 8
+	s.isReverse = false
+	return nil
 }
