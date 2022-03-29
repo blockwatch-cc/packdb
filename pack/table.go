@@ -1779,6 +1779,10 @@ func (t *Table) QueryTxDesc(ctx context.Context, tx *Tx, q Query) (*Result, erro
 	}
 	q.journalTime = time.Since(q.lap)
 
+	if q.Limit > 0 && q.rowsMatched >= q.Limit {
+		return res, nil
+	}
+
 	if !q.IsEmptyMatch() {
 		q.lap = time.Now()
 	packloop:
