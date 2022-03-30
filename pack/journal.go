@@ -147,6 +147,7 @@ func (j *Journal) StoreLegacy(dbTx store.Tx, bucketName []byte) (int, int, error
 	if err != nil {
 		return n, 0, err
 	}
+	idx, last = 0, 0
 	for _, v := range j.tomb {
 		idx, last = j.PkIndex(v, last)
 		if idx < 0 {
