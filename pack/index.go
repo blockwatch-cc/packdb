@@ -544,7 +544,7 @@ func (idx *Index) CanMatch(cond Condition) bool {
 
 func (idx *Index) LookupTx(ctx context.Context, tx *Tx, cond Condition) ([]uint64, error) {
 	if !idx.CanMatch(cond) {
-		return nil, fmt.Errorf("pack: %s: incompatible condition %", idx.name(), cond)
+		return nil, fmt.Errorf("pack: %s: incompatible condition %s", idx.name(), cond)
 	}
 
 	keys := idx.table.pkPool.Get().([]uint64)
