@@ -1176,11 +1176,6 @@ func (n ConditionTreeNode) MatchPackOr(pkg *Package, info PackInfo) *vec.BitSet 
 			b = c.MatchPack(pkg, bits)
 		}
 
-		if b.Count() == 0 {
-			b.Close()
-			continue
-		}
-
 		bits.Or(b)
 		b.Close()
 
