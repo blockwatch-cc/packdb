@@ -4,14 +4,9 @@
 package pack
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
-	"math"
 	"math/rand"
-	"sort"
 	"testing"
-	"testing/quick"
 
 	"blockwatch.cc/packdb/encoding/block"
 	"blockwatch.cc/packdb/vec"
@@ -28,38 +23,36 @@ func randUint64Slice(n, u int) []uint64 {
 	return s
 }
 
-func makeSortedPackageHeaderList(n int) PackageHeaderList {
+func makeSortedPackInfoList(n int) PackInfoList {
 	// generate random values
 	values := randUint64Slice(n, 1)
 
 	// strip duplicates and sort
 	values = vec.UniqueUint64Slice(values)
 
-	// generate pack headers
-	heads := make(PackageHeaderList, 0)
+	// generate pack packers
+	packs := make(PackInfoList, 0)
 	for i, v := range values {
 		max := uint64(v + 1000)
 		if i < len(values)-1 {
 			max = values[i+1] - 1
 		}
-		head := PackageHeader{
-			Key:     make([]byte, 4),
-			NFields: 1,
+		pack := PackInfo{
+			Key:     uint32(i),
 			NValues: 1,
-			BlockHeaders: block.BlockHeaderList{
+			Blocks: block.BlockHeaderList{
 				block.BlockHeader{
 					MinValue: uint64(v),
 					MaxValue: max,
 				},
 			},
 		}
-		binary.BigEndian.PutUint32(head.Key, uint32(i))
-		heads = append(heads, head)
+		packs = append(packs, pack)
 	}
-	return heads
+	return packs
 }
 
-func makeUnsortedPackageHeaderList(n int) PackageHeaderList {
+func makeUnsortedPackInfoList(n int) PackInfoList {
 	// generate random values
 	values := randUint64Slice(n, 1)
 
@@ -78,119 +71,41 @@ func makeUnsortedPackageHeaderList(n int) PackageHeaderList {
 		maxvalues[i] = max
 	}
 
-	// generate pack headers
-	heads := make(PackageHeaderList, 0)
+	// generate pack packers
+	packs := make(PackInfoList, 0)
 	for i, v := range minvalues {
-		head := PackageHeader{
-			Key:     make([]byte, 4),
-			NFields: 1,
+		pack := PackInfo{
+			Key:     uint32(i),
 			NValues: 1,
-			BlockHeaders: block.BlockHeaderList{
+			Blocks: block.BlockHeaderList{
 				block.BlockHeader{
 					MinValue: v,
 					MaxValue: maxvalues[i],
 				},
 			},
 		}
-		binary.BigEndian.PutUint32(head.Key, uint32(i))
-		heads = append(heads, head)
+		packs = append(packs, pack)
 	}
-	return heads
-}
-
-func TestBestPackSorted_Quick(t *testing.T) {
-	for _, n := range []int{
-		0,
-		1,
-		1000,
-		10000,
-	} {
-		t.Run(fmt.Sprintf("%d", n), func(T *testing.T) {
-			heads := makeSortedPackageHeaderList(n)
-			v1 := NewPackIndexV1(heads, 0)
-			h2 := make(PackageHeaderList, len(heads))
-			copy(h2, heads)
-			v2 := NewPackIndex(h2, 0)
-			err := quick.CheckEqual(
-				func(val uint64, last int) (int, uint64, uint64) {
-					if last < 0 {
-						last = -last
-					}
-					if n > 0 {
-						last = last % n
-					} else {
-						last = 0
-					}
-					return v1.Best(val, last)
-				}, func(val uint64, last int) (int, uint64, uint64) {
-					return v2.Best(val)
-				},
-				nil,
-			)
-			if err != nil {
-				T.Error(err)
-			}
-		})
-	}
-}
-
-func TestBestPackUnsorted_Quick(t *testing.T) {
-	for _, n := range []int{
-		0,
-		1,
-		10,
-		1000,
-		10000,
-	} {
-		t.Run(fmt.Sprintf("%d", n), func(T *testing.T) {
-			heads := makeUnsortedPackageHeaderList(n)
-			for _, v := range heads {
-				T.Logf("key %08x min %016x max %016x", v.Key, v.BlockHeaders[0].MinValue, v.BlockHeaders[0].MaxValue)
-			}
-			h2 := make(PackageHeaderList, len(heads))
-			copy(h2, heads)
-			v1 := NewPackIndexV1(heads, 0)
-			v2 := NewPackIndex(h2, 0)
-			err := quick.CheckEqual(
-				func(val uint64, last int) (int, uint64, uint64) {
-					if last < 0 {
-						last = -last
-					}
-					if n > 0 {
-						last = last % n
-					} else {
-						last = 0
-					}
-					return v1.Best(val, last)
-				}, func(val uint64, last int) (int, uint64, uint64) {
-					return v2.Best(val)
-				},
-				nil,
-			)
-			if err != nil {
-				T.Error(err)
-			}
-		})
-	}
+	return packs
 }
 
 type packIndexTestListItem struct {
-	Key []byte
+	Key uint32
 	Min uint64
 	Max uint64
 }
 
 type packIndexTestValueItem struct {
 	Value  uint64
-	ExpKey []byte
+	ExpKey uint32
 	ExpMin uint64
 	ExpMax uint64
-	NotV1  bool
-	NotV2  bool
 }
 
 type packIndexTestCase struct {
 	Name   string
+	Info   PackInfo // used for Add
+	Key    uint32   // used for Remove
 	List   []packIndexTestListItem
 	Values []packIndexTestValueItem
 }
@@ -200,7 +115,7 @@ var packIndexTestCases = []packIndexTestCase{
 		Name: "single",
 		List: []packIndexTestListItem{
 			packIndexTestListItem{
-				Key: []byte{0x0, 0x0, 0x0, 0x1},
+				Key: 1,
 				Min: 1000,
 				Max: 2000,
 			},
@@ -209,28 +124,28 @@ var packIndexTestCases = []packIndexTestCase{
 			// before min match (should return first pack in list)
 			packIndexTestValueItem{
 				Value:  100,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// exact min match
 			packIndexTestValueItem{
 				Value:  1000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// exact max match
 			packIndexTestValueItem{
 				Value:  2000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// after max match
 			packIndexTestValueItem{
 				Value:  3000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
@@ -240,12 +155,12 @@ var packIndexTestCases = []packIndexTestCase{
 		Name: "multi-sorted",
 		List: []packIndexTestListItem{
 			packIndexTestListItem{
-				Key: []byte{0x0, 0x0, 0x0, 0x1},
+				Key: 1,
 				Min: 1000,
 				Max: 2000,
 			},
 			packIndexTestListItem{
-				Key: []byte{0x0, 0x0, 0x0, 0x2},
+				Key: 2,
 				Min: 3000,
 				Max: 4000,
 			},
@@ -254,78 +169,144 @@ var packIndexTestCases = []packIndexTestCase{
 			// before min match (should return first pack in list)
 			packIndexTestValueItem{
 				Value:  100,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// exact min first match
 			packIndexTestValueItem{
 				Value:  1000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// min between match
 			packIndexTestValueItem{
 				Value:  1500,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// exact max first match
 			packIndexTestValueItem{
 				Value:  2000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// max first +1
 			packIndexTestValueItem{
 				Value:  2001,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
-			// min second -1 (v2 selects left pack)
+			// min second -1
 			packIndexTestValueItem{
 				Value:  2999,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
-				NotV1:  true,
-			},
-			// min second -1 (v1 selects closes pack)
-			packIndexTestValueItem{
-				Value:  2999,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x2},
-				ExpMin: 3000,
-				ExpMax: 4000,
-				NotV2:  true,
 			},
 			// within second pack
 			packIndexTestValueItem{
 				Value:  3500,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x2},
+				ExpKey: 2,
 				ExpMin: 3000,
 				ExpMax: 4000,
 			},
 			// after max match
 			packIndexTestValueItem{
 				Value:  5000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x2},
+				ExpKey: 2,
 				ExpMin: 3000,
 				ExpMax: 4000,
 			},
 		},
 	},
+	packIndexTestCase{
+		Name: "multi-duplicate",
+		List: []packIndexTestListItem{
+			packIndexTestListItem{
+				Key: 1,
+				Min: 1000,
+				Max: 1000,
+			},
+			packIndexTestListItem{
+				Key: 2,
+				Min: 1000,
+				Max: 1000,
+			},
+			packIndexTestListItem{
+				Key: 3,
+				Min: 1000,
+				Max: 2000,
+			},
+			packIndexTestListItem{
+				Key: 4,
+				Min: 2001,
+				Max: 3000,
+			},
+		},
+		Values: []packIndexTestValueItem{
+			// before min match (should return first pack in list)
+			packIndexTestValueItem{
+				Value:  100,
+				ExpKey: 1,
+				ExpMin: 1000,
+				ExpMax: 1000,
+			},
+			// exact min match, should return last pack where min equals
+			packIndexTestValueItem{
+				Value:  1000,
+				ExpKey: 3,
+				ExpMin: 1000,
+				ExpMax: 2000,
+			},
+			// min between match
+			packIndexTestValueItem{
+				Value:  1500,
+				ExpKey: 3,
+				ExpMin: 1000,
+				ExpMax: 2000,
+			},
+			// exact max match
+			packIndexTestValueItem{
+				Value:  2000,
+				ExpKey: 3,
+				ExpMin: 1000,
+				ExpMax: 2000,
+			},
+			// max first +1
+			packIndexTestValueItem{
+				Value:  2001,
+				ExpKey: 4,
+				ExpMin: 2001,
+				ExpMax: 3000,
+			},
+			// max -1
+			packIndexTestValueItem{
+				Value:  2999,
+				ExpKey: 4,
+				ExpMin: 2001,
+				ExpMax: 3000,
+			},
+			// after max match
+			packIndexTestValueItem{
+				Value:  5000,
+				ExpKey: 4,
+				ExpMin: 2001,
+				ExpMax: 3000,
+			},
+		},
+	},
 }
 
-func buildPackHeader(key []byte, min, max uint64) PackageHeader {
-	return PackageHeader{
+func buildPackHeader(key uint32, min, max uint64) PackInfo {
+	return PackInfo{
 		Key:     key,
-		NFields: 1,
 		NValues: 1,
-		BlockHeaders: block.BlockHeaderList{
+		Blocks: block.BlockHeaderList{
 			block.BlockHeader{
 				MinValue: min,
 				MaxValue: max,
@@ -334,49 +315,26 @@ func buildPackHeader(key []byte, min, max uint64) PackageHeader {
 	}
 }
 
-func buildPackHeaderInt(key int, min, max uint64) PackageHeader {
-	var k [4]byte
-	binary.BigEndian.PutUint32(k[:], uint32(key))
-	return buildPackHeader(k[:], min, max)
+func buildPackHeaderInt(key int, min, max uint64) PackInfo {
+	return buildPackHeader(uint32(key), min, max)
 }
 
-func buildPackHeaderList(items []packIndexTestListItem) PackageHeaderList {
-	heads := make(PackageHeaderList, len(items))
+func buildPackHeaderList(items []packIndexTestListItem) PackInfoList {
+	packs := make(PackInfoList, len(items))
 	for i, v := range items {
-		heads[i] = buildPackHeader(v.Key, v.Min, v.Max)
+		packs[i] = buildPackHeader(v.Key, v.Min, v.Max)
 	}
-	return heads
+	return packs
 }
 
 func TestPackIndexBest(t *testing.T) {
 	for _, c := range packIndexTestCases {
-		h1 := buildPackHeaderList(c.List)
-		h2 := buildPackHeaderList(c.List)
-		v1 := NewPackIndexV1(h1, 0)
-		v2 := NewPackIndex(h2, 0)
-
-		// test on v1 impl
+		idx := NewPackIndex(buildPackHeaderList(c.List), 0)
 		for _, v := range c.Values {
-			if v.NotV1 {
-				continue
-			}
-			p, min, max := v1.Best(v.Value, 0)
-			if exp, got := v.ExpKey, v1.heads[p].Key; bytes.Compare(exp, got) != 0 {
+			p, min, max, _ := idx.Best(v.Value)
+			if exp, got := v.ExpKey, idx.packs[p].Key; exp != got {
 				// min, max := v1.MinMax(p1)
-				t.Errorf("invalid pack selected by v1 exp=%08x [%d/%d] got=%08x [%d/%d] for value %d",
-					exp, v.ExpMin, v.ExpMax, got, min, max, v.Value)
-			}
-		}
-
-		// test on v2 impl
-		for _, v := range c.Values {
-			if v.NotV2 {
-				continue
-			}
-			p, min, max := v2.Best(v.Value)
-			if exp, got := v.ExpKey, v1.heads[p].Key; bytes.Compare(exp, got) != 0 {
-				// min, max := v1.MinMax(p1)
-				t.Errorf("invalid pack selected by v2 exp=%08x [%d/%d] got=%08x [%d/%d] for value %d",
+				t.Errorf("invalid pack selected by exp=%08x [%d/%d] got=%08x [%d/%d] for value %d",
 					exp, v.ExpMin, v.ExpMax, got, min, max, v.Value)
 			}
 		}
@@ -388,72 +346,150 @@ var packListAddTestCases = []packIndexTestCase{
 		Name: "add_middle",
 		List: []packIndexTestListItem{
 			packIndexTestListItem{
-				Key: []byte{0x0, 0x0, 0x0, 0x1},
+				Key: 1,
 				Min: 1000,
 				Max: 2000,
 			},
 			packIndexTestListItem{
-				Key: []byte{0x0, 0x0, 0x0, 0x2},
+				Key: 2,
 				Min: 5000,
 				Max: 6000,
 			},
 		},
+		Info: buildPackHeaderInt(3, 3000, 4000),
 		Values: []packIndexTestValueItem{
 			// before min match (should return first pack in list)
 			packIndexTestValueItem{
 				Value:  100,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// exact min match
 			packIndexTestValueItem{
 				Value:  1000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// exact max match
 			packIndexTestValueItem{
 				Value:  2000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// added pack min match
 			packIndexTestValueItem{
 				Value:  3000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x3},
+				ExpKey: 3,
 				ExpMin: 3000,
 				ExpMax: 4000,
 			},
 			// added pack middle match
 			packIndexTestValueItem{
 				Value:  3500,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x3},
+				ExpKey: 3,
 				ExpMin: 3000,
 				ExpMax: 4000,
 			},
 			// added pack max match
 			packIndexTestValueItem{
 				Value:  4000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x3},
+				ExpKey: 3,
 				ExpMin: 3000,
 				ExpMax: 4000,
 			},
 			// added pack max + 1 match
 			packIndexTestValueItem{
 				Value:  4001,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x3},
+				ExpKey: 3,
 				ExpMin: 3000,
 				ExpMax: 4000,
 			},
 			// last pack match
 			packIndexTestValueItem{
 				Value:  5500,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x2},
+				ExpKey: 2,
 				ExpMin: 5000,
 				ExpMax: 6000,
+			},
+		},
+	},
+	packIndexTestCase{
+		Name: "add-duplicate",
+		List: []packIndexTestListItem{
+			packIndexTestListItem{
+				Key: 1,
+				Min: 1000,
+				Max: 1000,
+			},
+			packIndexTestListItem{
+				Key: 2,
+				Min: 1000,
+				Max: 1000,
+			},
+			packIndexTestListItem{
+				Key: 3,
+				Min: 1000,
+				Max: 2000,
+			},
+			packIndexTestListItem{
+				Key: 4,
+				Min: 2001,
+				Max: 3000,
+			},
+		},
+		Info: buildPackHeaderInt(5, 1000, 1000),
+		Values: []packIndexTestValueItem{
+			// before min match (should return first pack in list)
+			packIndexTestValueItem{
+				Value:  100,
+				ExpKey: 1,
+				ExpMin: 1000,
+				ExpMax: 1000,
+			},
+			// exact min match, should return last pack where min equals
+			packIndexTestValueItem{
+				Value:  1000,
+				ExpKey: 3,
+				ExpMin: 1000,
+				ExpMax: 2000,
+			},
+			// min between match
+			packIndexTestValueItem{
+				Value:  1500,
+				ExpKey: 3,
+				ExpMin: 1000,
+				ExpMax: 2000,
+			},
+			// exact max match
+			packIndexTestValueItem{
+				Value:  2000,
+				ExpKey: 3,
+				ExpMin: 1000,
+				ExpMax: 2000,
+			},
+			// max first +1
+			packIndexTestValueItem{
+				Value:  2001,
+				ExpKey: 4,
+				ExpMin: 2001,
+				ExpMax: 3000,
+			},
+			// max -1
+			packIndexTestValueItem{
+				Value:  2999,
+				ExpKey: 4,
+				ExpMin: 2001,
+				ExpMax: 3000,
+			},
+			// after max match
+			packIndexTestValueItem{
+				Value:  5000,
+				ExpKey: 4,
+				ExpMin: 2001,
+				ExpMax: 3000,
 			},
 		},
 	},
@@ -461,38 +497,12 @@ var packListAddTestCases = []packIndexTestCase{
 
 func TestPackIndexAfterAdd(t *testing.T) {
 	for _, c := range packListAddTestCases {
-		h1 := buildPackHeaderList(c.List)
-		h2 := buildPackHeaderList(c.List)
-		v1 := NewPackIndexV1(h1, 0)
-		v2 := NewPackIndex(h2, 0)
-
-		// add an new middle pack
-		head := buildPackHeaderInt(3, 3000, 4000)
-		v1.AddOrUpdate(head)
-		v2.AddOrUpdate(head)
-
-		// test on v1 impl
+		idx := NewPackIndex(buildPackHeaderList(c.List), 0)
+		idx.AddOrUpdate(c.Info)
 		for _, v := range c.Values {
-			if v.NotV1 {
-				continue
-			}
-			p, min, max := v1.Best(v.Value, 0)
-			if exp, got := v.ExpKey, v1.heads[p].Key; bytes.Compare(exp, got) != 0 {
-				// min, max := v1.MinMax(p1)
-				t.Errorf("invalid pack selected by v1 exp=%08x [%d/%d] got=%08x [%d/%d] for value %d",
-					exp, v.ExpMin, v.ExpMax, got, min, max, v.Value)
-			}
-		}
-
-		// test on v2 impl
-		for _, v := range c.Values {
-			if v.NotV2 {
-				continue
-			}
-			p, min, max := v2.Best(v.Value)
-			if exp, got := v.ExpKey, v1.heads[p].Key; bytes.Compare(exp, got) != 0 {
-				// min, max := v1.MinMax(p1)
-				t.Errorf("invalid pack selected by v2 exp=%08x [%d/%d] got=%08x [%d/%d] for value %d",
+			p, min, max, _ := idx.Best(v.Value)
+			if exp, got := v.ExpKey, idx.packs[p].Key; exp != got {
+				t.Errorf("invalid pack selected by exp=%08x [%d/%d] got=%08x [%d/%d] for value %d",
 					exp, v.ExpMin, v.ExpMax, got, min, max, v.Value)
 			}
 		}
@@ -504,70 +514,62 @@ var packListRemoveTestCases = []packIndexTestCase{
 		Name: "remove_middle",
 		List: []packIndexTestListItem{
 			packIndexTestListItem{
-				Key: []byte{0x0, 0x0, 0x0, 0x1},
+				Key: 1,
 				Min: 1000,
 				Max: 2000,
 			},
 			packIndexTestListItem{
-				Key: []byte{0x0, 0x0, 0x0, 0x2},
+				Key: 2,
 				Min: 3000,
 				Max: 4000,
 			},
 			packIndexTestListItem{
-				Key: []byte{0x0, 0x0, 0x0, 0x3},
+				Key: 3,
 				Min: 5000,
 				Max: 6000,
 			},
 		},
+		Key: 2,
 		Values: []packIndexTestValueItem{
 			// before min match (should return first pack in list)
 			packIndexTestValueItem{
 				Value:  100,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// exact min match
 			packIndexTestValueItem{
 				Value:  1000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// exact max match
 			packIndexTestValueItem{
 				Value:  2000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
 			// removed pack value redirected to min
 			packIndexTestValueItem{
 				Value:  3000,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
 			},
-			// removed pack value closer to next in V1
+			// removed pack value closer to previous
 			packIndexTestValueItem{
 				Value:  3501,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x3},
-				ExpMin: 5000,
-				ExpMax: 6000,
-				NotV2:  true,
-			},
-			// removed pack value closer to previous in V2
-			packIndexTestValueItem{
-				Value:  3501,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x1},
+				ExpKey: 1,
 				ExpMin: 1000,
 				ExpMax: 2000,
-				NotV1:  true,
 			},
 			// last pack match
 			packIndexTestValueItem{
 				Value:  5500,
-				ExpKey: []byte{0x0, 0x0, 0x0, 0x3},
+				ExpKey: 3,
 				ExpMin: 5000,
 				ExpMax: 6000,
 			},
@@ -577,38 +579,13 @@ var packListRemoveTestCases = []packIndexTestCase{
 
 func TestPackIndexAfterRemove(t *testing.T) {
 	for _, c := range packListRemoveTestCases {
-		h1 := buildPackHeaderList(c.List)
-		h2 := buildPackHeaderList(c.List)
-		v1 := NewPackIndexV1(h1, 0)
-		v2 := NewPackIndex(h2, 0)
-
-		// add an new middle pack
-		head := buildPackHeaderInt(2, 3000, 4000)
-		v1.Remove(head)
-		v2.Remove(head)
-
-		// test on v1 impl
+		idx := NewPackIndex(buildPackHeaderList(c.List), 0)
+		idx.Remove(c.Key)
 		for _, v := range c.Values {
-			if v.NotV1 {
-				continue
-			}
-			p, min, max := v1.Best(v.Value, 0)
-			if exp, got := v.ExpKey, v1.heads[p].Key; bytes.Compare(exp, got) != 0 {
+			p, min, max, _ := idx.Best(v.Value)
+			if exp, got := v.ExpKey, idx.packs[p].Key; exp != got {
 				// min, max := v1.MinMax(p1)
-				t.Errorf("invalid pack selected by v1 exp=%08x [%d/%d] got=%08x [%d/%d] for value %d",
-					exp, v.ExpMin, v.ExpMax, got, min, max, v.Value)
-			}
-		}
-
-		// test on v2 impl
-		for _, v := range c.Values {
-			if v.NotV2 {
-				continue
-			}
-			p, min, max := v2.Best(v.Value)
-			if exp, got := v.ExpKey, v1.heads[p].Key; bytes.Compare(exp, got) != 0 {
-				// min, max := v1.MinMax(p1)
-				t.Errorf("invalid pack selected by v2 exp=%08x [%d/%d] got=%08x [%d/%d] for value %d",
+				t.Errorf("invalid pack selected by exp=%08x [%d/%d] got=%08x [%d/%d] for value %d",
 					exp, v.ExpMin, v.ExpMax, got, min, max, v.Value)
 			}
 		}
@@ -629,88 +606,11 @@ var bestPackBenchmarkSizes = []benchmarkSize{
 	{"64k", 64 * 1024},
 }
 
-func BenchmarkPackIndexBestSortedV1(B *testing.B) {
+func BenchmarkPackIndexBestSorted(B *testing.B) {
 	for _, n := range bestPackBenchmarkSizes {
 		B.Run(fmt.Sprintf("%s", n.name), func(B *testing.B) {
-			v1 := NewPackIndexV1(makeSortedPackageHeaderList(n.l), 0)
-			max := v1.maxpks[v1.Len()-1]
-			B.ResetTimer()
-			for i := 0; i < B.N; i++ {
-				v1.Best(uint64(rand.Int63n(int64(max))+1), 0)
-			}
-		})
-	}
-}
-
-func BenchmarkPackIndexBestUnsortedV1(B *testing.B) {
-	for _, n := range bestPackBenchmarkSizes {
-		B.Run(fmt.Sprintf("%s", n.name), func(B *testing.B) {
-			v1 := NewPackIndexV1(makeUnsortedPackageHeaderList(n.l), 0)
-			max := v1.maxpks[v1.Len()-1]
-			B.ResetTimer()
-			for i := 0; i < B.N; i++ {
-				v1.Best(uint64(rand.Int63n(int64(max))+1), 0)
-			}
-		})
-	}
-}
-
-func BenchmarkPackIndexAppendV1(B *testing.B) {
-	for _, n := range bestPackBenchmarkSizes {
-		B.Run(fmt.Sprintf("%s", n.name), func(B *testing.B) {
-			v1 := NewPackIndexV1(makeSortedPackageHeaderList(n.l), 0)
-			l := v1.Len()
-			max := v1.maxpks[v1.Len()-1]
-			B.ResetTimer()
-			for i := 0; i < B.N; i++ {
-				v1.AddOrUpdate(buildPackHeaderInt(i+l, max+1, max+1000))
-				max += 1000
-			}
-		})
-	}
-}
-
-func BenchmarkPackIndexAddV1(B *testing.B) {
-	for _, n := range bestPackBenchmarkSizes {
-		B.Run(fmt.Sprintf("%s", n.name), func(B *testing.B) {
-			v1 := NewPackIndexV1(makeSortedPackageHeaderList(n.l), 0)
-			l := v1.Len() / 2
-			min, max := v1.MinMax(l)
-			head := buildPackHeaderInt(l, min, max)
-			B.ResetTimer()
-			for i := 0; i < B.N; i++ {
-				// remove and re-append an existing header
-				v1.Remove(head)
-				v1.AddOrUpdate(head)
-			}
-		})
-	}
-}
-
-func BenchmarkPackIndexUpdateV1(B *testing.B) {
-	for _, n := range bestPackBenchmarkSizes {
-		B.Run(fmt.Sprintf("%s", n.name), func(B *testing.B) {
-			v1 := NewPackIndexV1(makeSortedPackageHeaderList(n.l), 0)
-			pos, min, max := v1.Len()/2, v1.minpks[v1.Len()/2], v1.maxpks[v1.Len()/2]
-			B.ResetTimer()
-			for i := 0; i < B.N; i++ {
-				// replace the middle pack, toggle min between min and min+1
-				// to force updates
-				setmin := min
-				if i&0x1 == 1 {
-					setmin = min + 1
-				}
-				v1.AddOrUpdate(buildPackHeaderInt(pos, setmin, max))
-			}
-		})
-	}
-}
-
-func BenchmarkPackIndexBestSortedV2(B *testing.B) {
-	for _, n := range bestPackBenchmarkSizes {
-		B.Run(fmt.Sprintf("%s", n.name), func(B *testing.B) {
-			v2 := NewPackIndex(makeSortedPackageHeaderList(n.l), 0)
-			max := v2.heads[v2.pairs[len(v2.pairs)-1].pos].BlockHeaders[v2.pkidx].MaxValue.(uint64)
+			v2 := NewPackIndex(makeSortedPackInfoList(n.l), 0)
+			max := v2.packs[v2.pos[len(v2.pos)-1]].Blocks[v2.pkidx].MaxValue.(uint64)
 			B.ResetTimer()
 			for i := 0; i < B.N; i++ {
 				v2.Best(uint64(rand.Int63n(int64(max)) + 1))
@@ -719,11 +619,11 @@ func BenchmarkPackIndexBestSortedV2(B *testing.B) {
 	}
 }
 
-func BenchmarkPackIndexBestUnsortedV2(B *testing.B) {
+func BenchmarkPackIndexBestUnsorted(B *testing.B) {
 	for _, n := range bestPackBenchmarkSizes {
 		B.Run(fmt.Sprintf("%s", n.name), func(B *testing.B) {
-			v2 := NewPackIndex(makeUnsortedPackageHeaderList(n.l), 0)
-			max := v2.heads[v2.pairs[len(v2.pairs)-1].pos].BlockHeaders[v2.pkidx].MaxValue.(uint64)
+			v2 := NewPackIndex(makeUnsortedPackInfoList(n.l), 0)
+			max := v2.packs[v2.pos[len(v2.pos)-1]].Blocks[v2.pkidx].MaxValue.(uint64)
 			B.ResetTimer()
 			for i := 0; i < B.N; i++ {
 				v2.Best(uint64(rand.Int63n(int64(max)) + 1))
@@ -732,13 +632,13 @@ func BenchmarkPackIndexBestUnsortedV2(B *testing.B) {
 	}
 }
 
-func BenchmarkPackIndexAppendV2(B *testing.B) {
+func BenchmarkPackIndexAppend(B *testing.B) {
 	for _, n := range bestPackBenchmarkSizes {
 		B.Run(fmt.Sprintf("%s", n.name), func(B *testing.B) {
-			v2 := NewPackIndex(makeSortedPackageHeaderList(n.l), 0)
+			v2 := NewPackIndex(makeSortedPackInfoList(n.l), 0)
 			l := v2.Len()
 			_, max := v2.MinMax(l - 1)
-			// head := buildPackHeaderInt(l, max+1, max+1000)
+			// pack := buildPackHeaderInt(l, max+1, max+1000)
 			B.ResetTimer()
 			for i := 0; i < B.N; i++ {
 				// append to end of list
@@ -749,27 +649,27 @@ func BenchmarkPackIndexAppendV2(B *testing.B) {
 	}
 }
 
-func BenchmarkPackIndexAddV2(B *testing.B) {
+func BenchmarkPackIndexAdd(B *testing.B) {
 	for _, n := range bestPackBenchmarkSizes {
 		B.Run(fmt.Sprintf("%s", n.name), func(B *testing.B) {
-			v2 := NewPackIndex(makeSortedPackageHeaderList(n.l), 0)
+			v2 := NewPackIndex(makeSortedPackInfoList(n.l), 0)
 			l := v2.Len() / 2
 			min, max := v2.MinMax(l)
-			head := buildPackHeaderInt(l, min, max)
+			pack := buildPackHeaderInt(l, min, max)
 			B.ResetTimer()
 			for i := 0; i < B.N; i++ {
-				// remove and re-append an existing header
-				v2.Remove(head)
-				v2.AddOrUpdate(head)
+				// remove and re-append an existing packer
+				v2.Remove(pack.Key)
+				v2.AddOrUpdate(pack)
 			}
 		})
 	}
 }
 
-func BenchmarkPackIndexUpdateV2(B *testing.B) {
+func BenchmarkPackIndexUpdate(B *testing.B) {
 	for _, n := range bestPackBenchmarkSizes {
 		B.Run(fmt.Sprintf("%s", n.name), func(B *testing.B) {
-			v2 := NewPackIndex(makeSortedPackageHeaderList(n.l), 0)
+			v2 := NewPackIndex(makeSortedPackInfoList(n.l), 0)
 			pos := v2.Len() / 2
 			min, max := v2.MinMax(pos)
 			B.ResetTimer()
@@ -784,110 +684,4 @@ func BenchmarkPackIndexUpdateV2(B *testing.B) {
 			}
 		})
 	}
-}
-
-// DEPRECATED V1 for benchmarking and testing
-//
-type PackIndexV1 struct {
-	heads  PackageHeaderList
-	deads  PackageHeaderList
-	pkidx  int
-	minpks []uint64
-	maxpks []uint64
-}
-
-// may be used in {Index|Table}.loadPackHeaders
-func NewPackIndexV1(heads PackageHeaderList, pkidx int) *PackIndexV1 {
-	if heads == nil {
-		heads = make(PackageHeaderList, 0)
-	}
-	l := &PackIndexV1{
-		heads:  heads,
-		pkidx:  pkidx,
-		minpks: make([]uint64, len(heads), cap(heads)),
-		maxpks: make([]uint64, len(heads), cap(heads)),
-	}
-	sort.Sort(l.heads)
-	l.rebuild()
-	return l
-}
-
-func (l *PackIndexV1) Len() int {
-	return len(l.heads)
-}
-
-func (l *PackIndexV1) MinMax(n int) (uint64, uint64) {
-	if n >= l.Len() {
-		return 0, 0
-	}
-	bh := l.heads[n].BlockHeaders[l.pkidx]
-	return bh.MinValue.(uint64), bh.MaxValue.(uint64)
-}
-
-func (l *PackIndexV1) AddOrUpdate(head PackageHeader) {
-	head.dirty = true
-	l.deads.RemoveKey(head.Key)
-	l.heads.Add(head)
-	l.rebuild()
-}
-
-func (l *PackIndexV1) Remove(head PackageHeader) {
-	l.heads.RemoveKey(head.Key)
-	l.deads.Add(head)
-	l.rebuild()
-}
-
-func (l *PackIndexV1) rebuild() {
-	numpacks := l.Len()
-	if l.minpks == nil || cap(l.minpks) < numpacks {
-		l.minpks = make([]uint64, numpacks)
-		l.maxpks = make([]uint64, numpacks)
-	}
-	l.minpks = l.minpks[:numpacks]
-	l.maxpks = l.maxpks[:numpacks]
-	for i := 0; i < numpacks; i++ {
-		head := l.heads[i].BlockHeaders[l.pkidx]
-		l.minpks[i], l.maxpks[i] = head.MinValue.(uint64), head.MaxValue.(uint64)
-	}
-}
-
-func (l *PackIndexV1) Best(val uint64, lastpack int) (int, uint64, uint64) {
-	numpacks := len(l.heads)
-
-	if numpacks == 0 {
-		return lastpack, 0, 0
-	}
-
-	var (
-		bestdist         uint64 = math.MaxUint64
-		bestpack         int    = lastpack
-		bestmin, bestmax uint64
-	)
-
-	for i, n := lastpack, numpacks+lastpack; i < n; i++ {
-		j := i
-		if j >= numpacks {
-			j -= numpacks
-		}
-		min, max := l.minpks[j], l.maxpks[j]
-		if val >= min && val <= max {
-			return j, min, max
-		}
-		if val < min {
-			if dist := min - val; bestdist > dist {
-				bestdist = dist
-				bestpack = j
-				bestmin = min
-				bestmax = max
-			}
-		} else {
-			if dist := val - max; bestdist > dist {
-				bestdist = dist
-				bestpack = j
-				bestmin = min
-				bestmax = max
-			}
-		}
-	}
-	return bestpack, bestmin, bestmax
 }
