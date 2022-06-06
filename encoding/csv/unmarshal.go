@@ -20,7 +20,6 @@
 // processing. Inside a quoted field a double quote may be escaped by a preceeding
 // second double quote which will be removed during parsing.
 //
-// Quoted fields containing commas and line breaks are not supported yet.
 package csv
 
 import (
@@ -177,6 +176,7 @@ func Unmarshal(data []byte, v interface{}) error {
 //
 //      dec := csv.NewDecoder(r)
 //      line, _ := dec.ReadLine()
+//      head, _ := dec.DecodeHeader(line)
 //      for {
 //          line, err = dec.ReadLine()
 //          if err != nil {
@@ -251,7 +251,7 @@ func (d *Decoder) Decode(v interface{}) error {
 
 		// process header when not disabled
 		if len(d.headerKeys) == 0 && d.readHeader {
-			if err := d.DecodeHeader(line); err != nil {
+			if _, err := d.DecodeHeader(line); err != nil {
 				return err
 			}
 			continue
@@ -273,19 +273,19 @@ func (d *Decoder) Decode(v interface{}) error {
 	return nil
 }
 
-// DecodeHeader reads CSV head fields from header and stores them as internal
+// DecodeHeader reads CSV head fields from line and stores them as internal
 // Decoder state required to map CSV records later on.
-func (d *Decoder) DecodeHeader(header string) error {
-	d.headerKeys = strings.Split(header, string(d.sep))
+func (d *Decoder) DecodeHeader(line string) ([]string, error) {
+	d.headerKeys = strings.Split(line, string(d.sep))
 	if len(d.headerKeys) == 0 {
-		return fmt.Errorf("csv: empty header")
+		return nil, fmt.Errorf("csv: empty header")
 	}
 	if d.trim {
 		for i, v := range d.headerKeys {
 			d.headerKeys[i] = strings.TrimSpace(v)
 		}
 	}
-	return nil
+	return d.headerKeys, nil
 }
 
 // DecodeRecord extracts CSV record fields from line and stores them into
@@ -308,16 +308,29 @@ func (d *Decoder) unmarshal(val reflect.Value, line string) error {
 	for _, v := range tokens {
 		// unquote and merge multiple tokens, when separated
 		switch true {
-		case strings.HasPrefix(v, Wrapper) && strings.HasSuffix(v, Wrapper):
+		case len(v) == 1 && strings.HasPrefix(v, Wrapper):
+			// (1) .. ,",", .. (2) .. ," text,", ..
+			if merged == "" {
+				merged += string(d.sep)
+			} else {
+				merged += string(d.sep)
+				combined = append(combined, merged)
+				merged = ""
+			}
+		case len(v) >= 2 && strings.HasPrefix(v, Wrapper) && strings.HasSuffix(v, Wrapper):
+			// (1) .. ,"", .. (2) ..," text text ", ..
 			combined = append(combined, v[1:len(v)])
 			merged = ""
 		case strings.HasPrefix(v, Wrapper):
+			// .. ," text, more text", .. (1st part)
 			merged = v[1:]
 		case strings.HasSuffix(v, Wrapper):
+			// .. ," text, more text", .. (2nd part)
 			merged = strings.Join([]string{merged, v[:len(v)-1]}, string(d.sep))
 			combined = append(combined, merged)
 			merged = ""
 		default:
+			// .. ," text, more, text", .. (middle part)
 			if merged != "" {
 				merged = strings.Join([]string{merged, v}, string(d.sep))
 			} else {

@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Marshaler is the interface implemented by types that can marshal themselves
@@ -185,6 +186,13 @@ func (e *Encoder) buildHeader(fields []string, val reflect.Value) error {
 }
 
 func (e *Encoder) output(fields []string) error {
+	// quote strings with whitespace and or separator
+	for i, v := range fields {
+		if !containsWhitespace(v) && !strings.Contains(v, e.sep) {
+			continue
+		}
+		fields[i] = strings.Join([]string{Wrapper, v, Wrapper}, "")
+	}
 	line := strings.Join(fields, string(e.sep))
 	if _, err := e.w.Write([]byte(line)); err != nil {
 		return fmt.Errorf("csv: %v", err)
@@ -194,6 +202,15 @@ func (e *Encoder) output(fields []string) error {
 	}
 	return nil
 
+}
+
+func containsWhitespace(s string) bool {
+	for _, v := range s {
+		if unicode.IsSpace(v) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Encoder) marshal(val reflect.Value) error {
@@ -231,13 +248,16 @@ func (e *Encoder) marshal(val reflect.Value) error {
 	if val.Kind() == reflect.Slice && val.Len() == len(e.headerKeys) {
 		for i := 0; i < val.Len(); i++ {
 			f := val.Index(i)
-			if f.IsNil() {
-				continue
-			}
 			if f.Type().Kind() == reflect.Interface {
+				if f.IsNil() {
+					continue
+				}
 				f = f.Elem()
 			}
-			if f.Type().Kind() == reflect.Ptr && !f.IsNil() {
+			if f.Type().Kind() == reflect.Ptr {
+				if f.IsNil() {
+					continue
+				}
 				f = f.Elem()
 			}
 			if !f.IsValid() {
@@ -256,6 +276,9 @@ func (e *Encoder) marshal(val reflect.Value) error {
 		for i, fName := range e.headerKeys {
 			// init with empty string
 			tokens[i] = ""
+			if fName[0] == '"' {
+				fName = fName[1 : len(fName)-1]
+			}
 
 			finfo, f := e.findStructField(val, fName)
 			if finfo == nil || !f.IsValid() {
