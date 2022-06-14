@@ -1896,7 +1896,7 @@ func (t *Table) CountTx(ctx context.Context, tx *Tx, q Query) (int64, error) {
 	if !q.IsEmptyMatch() {
 		q.lap = time.Now()
 	packloop:
-		for _, p := range q.MakePackSchedule(false) {
+		for _, p := range q.MakePackSchedule(q.Order == OrderDesc) {
 			if util.InterruptRequested(ctx) {
 				return int64(q.rowsMatched), ctx.Err()
 			}
@@ -2423,10 +2423,13 @@ func (t *Table) Compact(ctx context.Context) error {
 			minSlice, _ := t.packs.MinMaxSlices()
 			var startIndex, srcIndex int = dstIndex, -1
 			var lastmin uint64 = math.MaxUint64
-			if isNewPack {
+			if isNewPack && startIndex > 0 {
 				startIndex--
 			}
 			for i := startIndex; i < len(minSlice); i++ {
+				if t.packs.packs[i].Key < dstPack.key {
+					continue
+				}
 				currmin := minSlice[i]
 				if currmin <= lastMaxPk {
 					continue

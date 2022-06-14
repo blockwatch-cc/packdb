@@ -90,8 +90,8 @@ func (t IndexType) MayHaveCollisions() bool {
 }
 
 type IndexEntry struct {
-	Key uint64 `pack:"K,pk,snappy"`
-	Id  uint64 `pack:"I,snappy"`
+	Key uint64 `pack:"K,pk"`
+	Id  uint64 `pack:"I"`
 }
 
 type Index struct {
