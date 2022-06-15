@@ -44,6 +44,13 @@ func NewBitSetFromBytes(buf []byte, size int) *BitSet {
 	return s
 }
 
+func (s *BitSet) Clone() *BitSet {
+	clone := NewBitSet(s.size)
+	copy(clone.buf, s.buf)
+	clone.cnt = s.cnt
+	return clone
+}
+
 func makeBitSet(size int) *BitSet {
 	return &BitSet{
 		buf:  make([]byte, bitFieldLen(size)),
