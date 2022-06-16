@@ -271,7 +271,7 @@ func uint32Remove(s []uint32, val uint32) []uint32 {
 func uint32AddUnique(s []uint32, val uint32) []uint32 {
 	l := len(s)
 	idx := sort.Search(l, func(i int) bool { return s[i] >= val })
-	if l > 0 && idx > -1 && s[idx] == val {
+	if idx < l && s[idx] == val {
 		return s
 	}
 	s = append(s, val)
