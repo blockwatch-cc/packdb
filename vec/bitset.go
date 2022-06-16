@@ -128,6 +128,9 @@ func (s *BitSet) AndNot(r *BitSet) *BitSet {
 }
 
 func (s *BitSet) Or(r *BitSet) *BitSet {
+	if s.size == 0 {
+		return s
+	}
 	if s.cnt == 0 {
 		copy(s.buf, r.buf)
 		s.cnt = r.cnt
