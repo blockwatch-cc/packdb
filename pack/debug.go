@@ -613,6 +613,28 @@ func (p *Package) DumpData(w io.Writer, mode DumpMode, aliases []string) error {
 	return nil
 }
 
+func (n UnboundCondition) Dump() string {
+	buf := bytes.NewBuffer(nil)
+	n.dump(0, buf)
+	return string(buf.Bytes())
+}
+
+func (n UnboundCondition) dump(level int, w io.Writer) {
+	if n.Leaf() {
+		fmt.Fprintln(w, strings.Repeat("  ", level), n.String())
+	}
+	if len(n.Children) > 0 {
+		kind := "AND"
+		if n.OrKind {
+			kind = "OR"
+		}
+		fmt.Fprintln(w, strings.Repeat("  ", level), kind)
+	}
+	for _, v := range n.Children {
+		v.dump(level+1, w)
+	}
+}
+
 func (n ConditionTreeNode) Dump() string {
 	buf := bytes.NewBuffer(nil)
 	n.dump(0, buf)
@@ -638,7 +660,7 @@ func (n ConditionTreeNode) dump(level int, w io.Writer) {
 func (q Query) Dump() string {
 	buf := bytes.NewBuffer(nil)
 	fmt.Fprintln(buf, "Query:", q.Name, "=>")
-	q.Conditions.dump(0, buf)
+	q.conds.dump(0, buf)
 	return string(buf.Bytes())
 }
 
@@ -649,14 +671,14 @@ func (j Join) Dump() string {
 	fmt.Fprintln(buf, "  Left:", j.Left.Table.Name())
 	fmt.Fprintln(buf, "  Where:")
 	j.Left.Where.dump(0, buf)
-	fmt.Fprintln(buf, "  Fields:", strings.Join(j.Left.Fields.Names(), ","))
-	fmt.Fprintln(buf, "  AS:", strings.Join(j.Left.FieldsAs, ","))
+	fmt.Fprintln(buf, "  Fields:", strings.Join(j.Left.Cols, ","))
+	fmt.Fprintln(buf, "  AS:", strings.Join(j.Left.ColsAs, ","))
 	fmt.Fprintln(buf, "  Limit:", j.Left.Limit)
 	fmt.Fprintln(buf, "  Right:", j.Right.Table.Name())
 	fmt.Fprintln(buf, "  Where:")
 	j.Right.Where.dump(0, buf)
-	fmt.Fprintln(buf, "  Fields:", strings.Join(j.Right.Fields.Names(), ","))
-	fmt.Fprintln(buf, "  AS:", strings.Join(j.Right.FieldsAs, ","))
+	fmt.Fprintln(buf, "  Fields:", strings.Join(j.Right.Cols, ","))
+	fmt.Fprintln(buf, "  AS:", strings.Join(j.Right.ColsAs, ","))
 	fmt.Fprintln(buf, "  Limit:", j.Right.Limit)
 	return buf.String()
 }

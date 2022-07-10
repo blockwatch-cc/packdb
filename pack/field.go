@@ -232,16 +232,15 @@ func Fields(proto interface{}) (FieldList, error) {
 		case reflect.String:
 			fields[i].Type = FieldTypeString
 		case reflect.Slice:
-			if f.CanInterface() && f.Type().Implements(binaryMarshalerType) {
-				log.Debugf("Slice type field %s type %s implements binary marshaler", finfo.name, f.Type().String())
+			if canMarshalBinary(f) {
 				fields[i].Type = FieldTypeBytes
 				break
 			}
-			if f.CanInterface() && f.Type().Implements(textMarshalerType) {
+			if canMarshalText(f) {
 				fields[i].Type = FieldTypeString
 				break
 			}
-			if f.CanInterface() && f.Type().Implements(stringerType) {
+			if canMarshalString(f) {
 				fields[i].Type = FieldTypeString
 				break
 			}
@@ -254,14 +253,13 @@ func Fields(proto interface{}) (FieldList, error) {
 		case reflect.Struct:
 			if f.Type().String() == "time.Time" {
 				fields[i].Type = FieldTypeDatetime
-			} else if f.CanInterface() && f.Type().Implements(binaryMarshalerType) {
+			} else if canMarshalBinary(f) {
 				fields[i].Type = FieldTypeBytes
 			} else {
 				return nil, fmt.Errorf("pack: unsupported embedded struct type %s", f.Type().String())
 			}
 		case reflect.Array:
-			if f.CanInterface() && f.Type().Implements(binaryMarshalerType) {
-				log.Debugf("Array type field %s type %s implements binary marshaler", finfo.name, f.Type().String())
+			if canMarshalBinary(f) {
 				fields[i].Type = FieldTypeBytes
 				break
 			}

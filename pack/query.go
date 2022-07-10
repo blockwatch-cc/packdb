@@ -20,18 +20,20 @@ import (
 var QueryLogMinDuration time.Duration = 500 * time.Millisecond
 
 type Query struct {
-	Name       string            // optional, used for query stats
-	NoCache    bool              // explicitly disable pack caching for this query
-	NoIndex    bool              // explicitly disable index query (use for many known duplicates)
-	Fields     FieldList         // SELECT ...
-	Conditions ConditionTreeNode // WHERE ... AND / OR tree
-	Order      OrderType         // ASC|DESC
-	Limit      int               // LIMIT ...
-	Offset     int               // OFFSET ...
+	Name       string           // optional, used for query stats
+	NoCache    bool             // explicitly disable pack caching for this query
+	NoIndex    bool             // explicitly disable index query (use for many known duplicates)
+	Columns    []string         // SELECT ...
+	Conditions UnboundCondition // WHERE ... AND / OR tree
+	Order      OrderType        // ASC|DESC
+	Limit      int              // LIMIT ...
+	Offset     int              // OFFSET ...
 
-	table     *Table
-	reqfields FieldList
-	idxFields FieldList
+	table   *Table
+	conds   ConditionTreeNode
+	outcols FieldList
+	reqcols FieldList
+	idxcols FieldList
 
 	start          time.Time
 	lap            time.Time
@@ -47,21 +49,13 @@ type Query struct {
 }
 
 func (q Query) IsEmptyMatch() bool {
-	return q.Conditions.NoMatch()
+	return q.conds.NoMatch()
 }
 
-func NewQuery(name string, table *Table) Query {
-	now := time.Now()
-	f := table.Fields()
+func NewQuery(name string) Query {
 	return Query{
-		Name:      name,
-		table:     table,
-		start:     now,
-		lap:       now,
-		Fields:    f,
-		Order:     OrderAsc,
-		reqfields: f,
-		idxFields: table.fields.Indexed(),
+		Name:  name,
+		Order: OrderAsc,
 	}
 }
 
@@ -75,8 +69,9 @@ func (q *Query) Close() {
 		}
 		q.table = nil
 	}
-	q.Fields = nil
-	q.reqfields = nil
+	q.outcols = nil
+	q.reqcols = nil
+	q.idxcols = nil
 }
 
 func (q *Query) Runtime() time.Duration {
@@ -107,19 +102,27 @@ func (q *Query) Compile(t *Table) error {
 	q.table = t
 	q.start = time.Now()
 	q.lap = q.start
-	if err := q.Conditions.Compile(); err != nil {
-		return fmt.Errorf("pack: %s %v", q.Name, err)
+	if q.conds.Size() == 0 {
+		q.conds = q.Conditions.Bind(q.table)
+		if err := q.conds.Compile(); err != nil {
+			return fmt.Errorf("pack: %s %v", q.Name, err)
+		}
 	}
-	if len(q.Fields) == 0 {
-		q.Fields = t.Fields()
-	} else {
-		q.Fields = q.Fields.MergeUnique(t.Fields().Pk())
+	if len(q.outcols) == 0 {
+		if len(q.Columns) == 0 {
+			q.outcols = t.fields
+		} else {
+			q.outcols = q.table.fields.Select(q.Columns...)
+			q.outcols.MergeUnique(t.fields.Pk())
+		}
 	}
-	q.reqfields = q.Fields.MergeUnique(q.Conditions.Fields()...)
-	if len(q.idxFields) == 0 {
-		q.idxFields = t.fields.Indexed()
+	if len(q.reqcols) == 0 {
+		q.reqcols = q.outcols.MergeUnique(q.conds.Fields()...)
 	}
-	if err := q.Check(); err != nil {
+	if len(q.idxcols) == 0 {
+		q.idxcols = t.fields.Indexed()
+	}
+	if err := q.check(); err != nil {
 		q.totalTime = time.Since(q.lap)
 		return err
 	}
@@ -132,20 +135,20 @@ func (q *Query) Compile(t *Table) error {
 	return nil
 }
 
-func (q Query) Check() error {
-	tfields := q.table.Fields()
-	for _, v := range q.reqfields {
+func (q Query) check() error {
+	tfields := q.table.fields
+	for _, v := range q.reqcols {
 		if !tfields.Contains(v.Name) {
-			return fmt.Errorf("undefined field '%s.%s' in query %s", q.table.name, v.Name, q.Name)
+			return fmt.Errorf("undefined column '%s.%s' in query %s", q.table.name, v.Name, q.Name)
 		}
 		if tfields.Find(v.Name).Type != v.Type {
-			return fmt.Errorf("mismatched type %s for field '%s.%s' in query %s", v.Type, q.table.name, v.Name, q.Name)
+			return fmt.Errorf("mismatched type %s for column '%s.%s' in query %s", v.Type, q.table.name, v.Name, q.Name)
 		}
 		if v.Index < 0 || v.Index >= len(tfields) {
-			return fmt.Errorf("illegal index %d for field '%s.%s' in query %s", v.Index, q.table.name, v.Name, q.Name)
+			return fmt.Errorf("illegal index %d for column '%s.%s' in query %s", v.Index, q.table.name, v.Name, q.Name)
 		}
 	}
-	if q.Conditions.Leaf() {
+	if q.conds.Leaf() {
 		return fmt.Errorf("unexpected simple condition tree in query %s", q.Name)
 	}
 	if q.Limit < 0 {
@@ -161,7 +164,7 @@ func (q *Query) queryIndexNode(ctx context.Context, tx *Tx, node *ConditionTreeN
 	ins := make([]ConditionTreeNode, 0)
 	for i, v := range node.Children {
 		if v.Leaf() {
-			if !q.idxFields.Contains(v.Cond.Field.Name) {
+			if !q.idxcols.Contains(v.Cond.Field.Name) {
 				continue
 			}
 			idx := q.table.indexes.FindField(v.Cond.Field.Name)
@@ -190,7 +193,7 @@ func (q *Query) queryIndexNode(ctx context.Context, tx *Tx, node *ConditionTreeN
 			}
 
 			c := &Condition{
-				Field:    q.table.Fields().Pk(),
+				Field:    q.table.fields.Pk(),
 				Mode:     FilterModeIn,
 				Value:    pkmatch,
 				IsSorted: true,
@@ -227,11 +230,11 @@ func (q *Query) queryIndexNode(ctx context.Context, tx *Tx, node *ConditionTreeN
 
 func (q *Query) QueryIndexes(ctx context.Context, tx *Tx) error {
 	q.lap = time.Now()
-	if q.NoIndex || q.Conditions.Empty() {
+	if q.NoIndex || q.conds.Empty() {
 		q.indexTime = time.Since(q.lap)
 		return nil
 	}
-	if err := q.queryIndexNode(ctx, tx, &q.Conditions); err != nil {
+	if err := q.queryIndexNode(ctx, tx, &q.conds); err != nil {
 		return err
 	}
 	q.indexTime = time.Since(q.lap)
@@ -241,7 +244,7 @@ func (q *Query) QueryIndexes(ctx context.Context, tx *Tx) error {
 func (q *Query) MakePackSchedule(reverse bool) []int {
 	schedule := make([]int, 0, q.table.packs.Len())
 	for _, p := range q.table.packs.pos {
-		if q.Conditions.MaybeMatchPack(q.table.packs.packs[p]) {
+		if q.conds.MaybeMatchPack(q.table.packs.packs[p]) {
 			schedule = append(schedule, int(p))
 		}
 	}
@@ -278,8 +281,13 @@ func (q *Query) MakePackLookupSchedule(ids []uint64, reverse bool) []int {
 	return schedule
 }
 
-func (q Query) WithFields(names ...string) Query {
-	q.Fields = q.table.Fields().Select(names...)
+func (q Query) WithTable(table *Table) Query {
+	q.table = table
+	return q
+}
+
+func (q Query) WithColumns(names ...string) Query {
+	q.Columns = append(q.Columns, names...)
 	return q
 }
 
@@ -318,92 +326,75 @@ func (q Query) WithoutCache() Query {
 	return q
 }
 
-func (q Query) And(conds ...UnboundCondition) Query {
+func (q Query) AndCondition(conds ...UnboundCondition) Query {
 	if len(conds) == 0 {
 		return q
 	}
-	q.Conditions.AddNode(And(conds...).Bind(q.table))
+	q.Conditions.Add(And(conds...))
 	return q
 }
 
-func (q Query) Or(conds ...UnboundCondition) Query {
+func (q Query) OrCondition(conds ...UnboundCondition) Query {
 	if len(conds) == 0 {
 		return q
 	}
-	q.Conditions.AddNode(Or(conds...).Bind(q.table))
+	q.Conditions.Add(Or(conds...))
 	return q
 }
 
-func (q Query) AndCondition(field string, mode FilterMode, value interface{}) Query {
-	q.Conditions.AddAndCondition(&Condition{
-		Field: q.table.Fields().Find(field),
-		Mode:  mode,
-		Value: value,
-	})
+func (q Query) And(col string, mode FilterMode, value interface{}) Query {
+	q.Conditions.And(col, mode, value)
 	return q
 }
 
-func (q Query) OrCondition(field string, mode FilterMode, value interface{}) Query {
-	q.Conditions.AddOrCondition(&Condition{
-		Field: q.table.Fields().Find(field),
-		Mode:  mode,
-		Value: value,
-	})
+func (q Query) Or(col string, mode FilterMode, value interface{}) Query {
+	q.Conditions.Or(col, mode, value)
 	return q
 }
 
-func (q Query) AndEqual(field string, value interface{}) Query {
-	return q.AndCondition(field, FilterModeEqual, value)
+func (q Query) AndEqual(col string, value interface{}) Query {
+	return q.And(col, FilterModeEqual, value)
 }
 
-func (q Query) AndNotEqual(field string, value interface{}) Query {
-	return q.AndCondition(field, FilterModeNotEqual, value)
+func (q Query) AndNotEqual(col string, value interface{}) Query {
+	return q.And(col, FilterModeNotEqual, value)
 }
 
-func (q Query) AndIn(field string, value interface{}) Query {
-	return q.AndCondition(field, FilterModeIn, value)
+func (q Query) AndIn(col string, value interface{}) Query {
+	return q.And(col, FilterModeIn, value)
 }
 
-func (q Query) AndNotIn(field string, value interface{}) Query {
-	return q.AndCondition(field, FilterModeNotIn, value)
+func (q Query) AndNotIn(col string, value interface{}) Query {
+	return q.And(col, FilterModeNotIn, value)
 }
 
-func (q Query) AndLt(field string, value interface{}) Query {
-	return q.AndCondition(field, FilterModeLt, value)
+func (q Query) AndLt(col string, value interface{}) Query {
+	return q.And(col, FilterModeLt, value)
 }
 
-func (q Query) AndLte(field string, value interface{}) Query {
-	return q.AndCondition(field, FilterModeLte, value)
+func (q Query) AndLte(col string, value interface{}) Query {
+	return q.And(col, FilterModeLte, value)
 }
 
-func (q Query) AndGt(field string, value interface{}) Query {
-	return q.AndCondition(field, FilterModeGt, value)
+func (q Query) AndGt(col string, value interface{}) Query {
+	return q.And(col, FilterModeGt, value)
 }
 
-func (q Query) AndGte(field string, value interface{}) Query {
-	return q.AndCondition(field, FilterModeGte, value)
+func (q Query) AndGte(col string, value interface{}) Query {
+	return q.And(col, FilterModeGte, value)
 }
 
-func (q Query) AndRegexp(field string, value interface{}) Query {
-	return q.AndCondition(field, FilterModeRegexp, value)
+func (q Query) AndRegexp(col string, value interface{}) Query {
+	return q.And(col, FilterModeRegexp, value)
 }
 
-func (q Query) AndRange(field string, from, to interface{}) Query {
-	if q.Conditions.OrKind {
-		q.Conditions = ConditionTreeNode{
-			OrKind:   false,
-			Children: []ConditionTreeNode{q.Conditions},
-		}
-	}
-	q.Conditions.Children = append(q.Conditions.Children,
-		ConditionTreeNode{
-			Cond: &Condition{
-				Field: q.table.Fields().Find(field),
-				Mode:  FilterModeRange,
-				From:  from,
-				To:    to,
-			},
-		})
+func (q Query) AndRange(col string, from, to interface{}) Query {
+	q.Conditions.AndRange(col, from, to)
+	return q
+}
+
+func (q Query) OrRange(col string, from, to interface{}) Query {
+	q.Conditions.OrRange(col, from, to)
 	return q
 }
 

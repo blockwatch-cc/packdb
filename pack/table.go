@@ -900,7 +900,7 @@ func (t *Table) Delete(ctx context.Context, q Query) (int64, error) {
 	}
 	defer tx.Rollback()
 
-	q.Fields = FieldList{t.Fields().Pk()}
+	q.Columns = []string{t.Fields().Pk().Name}
 	res, err := t.QueryTx(ctx, tx, q)
 	if err != nil {
 		return 0, err
@@ -1451,7 +1451,7 @@ func (t *Table) LookupTx(ctx context.Context, tx *Tx, ids []uint64) (*Result, er
 		table:  t,
 	}
 
-	q := NewQuery(t.name+".lookup", t)
+	q := NewQuery(t.name + ".lookup")
 	defer func() {
 		atomic.AddInt64(&t.stats.QueriedTuples, int64(q.rowsMatched))
 		q.Close()
@@ -1530,7 +1530,7 @@ func (t *Table) LookupTx(ctx context.Context, tx *Tx, ids []uint64) (*Result, er
 			return nil, ctx.Err()
 		}
 
-		pkg, err := t.loadSharedPack(tx, t.packs.packs[nextpack].Key, true, q.reqfields)
+		pkg, err := t.loadSharedPack(tx, t.packs.packs[nextpack].Key, true, q.reqcols)
 		if err != nil {
 			res.Close()
 			return nil, err
@@ -1601,7 +1601,7 @@ func (t *Table) QueryTx(ctx context.Context, tx *Tx, q Query) (*Result, error) {
 		}
 	}()
 
-	jbits = q.Conditions.MatchPack(t.journal.DataPack(), PackInfo{})
+	jbits = q.conds.MatchPack(t.journal.DataPack(), PackInfo{})
 	q.journalTime = time.Since(q.lap)
 
 	if err := q.QueryIndexes(ctx, tx); err != nil {
@@ -1609,11 +1609,11 @@ func (t *Table) QueryTx(ctx context.Context, tx *Tx, q Query) (*Result, error) {
 	}
 
 	pkg := t.packPool.Get().(*Package)
-	pkg.KeepFields(q.reqfields)
-	pkg.UpdateAliasesFrom(q.reqfields)
+	pkg.KeepFields(q.reqcols)
+	pkg.UpdateAliasesFrom(q.reqcols)
 
 	res := &Result{
-		fields: q.reqfields,
+		fields: q.reqcols,
 		pkg:    pkg,
 		table:  t,
 	}
@@ -1631,14 +1631,14 @@ func (t *Table) QueryTx(ctx context.Context, tx *Tx, q Query) (*Result, error) {
 				return nil, ctx.Err()
 			}
 
-			pkg, err := t.loadSharedPack(tx, t.packs.packs[p].Key, !q.NoCache, q.reqfields)
+			pkg, err := t.loadSharedPack(tx, t.packs.packs[p].Key, !q.NoCache, q.reqcols)
 			if err != nil {
 				res.Close()
 				return nil, err
 			}
 			q.packsScanned++
 
-			bits := q.Conditions.MatchPack(pkg, t.packs.packs[p])
+			bits := q.conds.MatchPack(pkg, t.packs.packs[p])
 			for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 				for i := idx; i < idx+length; i++ {
 					pkid, err := pkg.Uint64At(pkg.pkindex, i)
@@ -1731,7 +1731,7 @@ func (t *Table) QueryTxDesc(ctx context.Context, tx *Tx, q Query) (*Result, erro
 		}
 	}()
 
-	jbits = q.Conditions.MatchPack(t.journal.DataPack(), PackInfo{})
+	jbits = q.conds.MatchPack(t.journal.DataPack(), PackInfo{})
 	q.journalTime = time.Since(q.lap)
 
 	if err := q.QueryIndexes(ctx, tx); err != nil {
@@ -1739,11 +1739,11 @@ func (t *Table) QueryTxDesc(ctx context.Context, tx *Tx, q Query) (*Result, erro
 	}
 
 	pkg := t.packPool.Get().(*Package)
-	pkg.KeepFields(q.reqfields)
-	pkg.UpdateAliasesFrom(q.reqfields)
+	pkg.KeepFields(q.reqcols)
+	pkg.UpdateAliasesFrom(q.reqcols)
 
 	res := &Result{
-		fields: q.reqfields,
+		fields: q.reqcols,
 		pkg:    pkg,
 		table:  t,
 	}
@@ -1792,14 +1792,14 @@ func (t *Table) QueryTxDesc(ctx context.Context, tx *Tx, q Query) (*Result, erro
 				return nil, ctx.Err()
 			}
 
-			pkg, err := t.loadSharedPack(tx, t.packs.packs[p].Key, !q.NoCache, q.reqfields)
+			pkg, err := t.loadSharedPack(tx, t.packs.packs[p].Key, !q.NoCache, q.reqcols)
 			if err != nil {
 				res.Close()
 				return nil, err
 			}
 			q.packsScanned++
 
-			bits := q.Conditions.MatchPack(pkg, t.packs.packs[p]).Reverse()
+			bits := q.conds.MatchPack(pkg, t.packs.packs[p]).Reverse()
 			for idx, length := bits.Run(bits.Size() - 1); idx >= 0; idx, length = bits.Run(idx - length) {
 				for i := idx; i > idx-length; i-- {
 					pkid, err := pkg.Uint64At(pkg.pkindex, i)
@@ -1882,7 +1882,7 @@ func (t *Table) CountTx(ctx context.Context, tx *Tx, q Query) (int64, error) {
 		q.Close()
 	}()
 
-	jbits = q.Conditions.MatchPack(t.journal.DataPack(), PackInfo{})
+	jbits = q.conds.MatchPack(t.journal.DataPack(), PackInfo{})
 	q.journalTime = time.Since(q.lap)
 
 	if err := q.QueryIndexes(ctx, tx); err != nil {
@@ -1901,13 +1901,13 @@ func (t *Table) CountTx(ctx context.Context, tx *Tx, q Query) (int64, error) {
 				return int64(q.rowsMatched), ctx.Err()
 			}
 
-			pkg, err := t.loadSharedPack(tx, t.packs.packs[p].Key, !q.NoCache, q.reqfields)
+			pkg, err := t.loadSharedPack(tx, t.packs.packs[p].Key, !q.NoCache, q.reqcols)
 			if err != nil {
 				return 0, err
 			}
 			q.packsScanned++
 
-			bits := q.Conditions.MatchPack(pkg, t.packs.packs[p])
+			bits := q.conds.MatchPack(pkg, t.packs.packs[p])
 			for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 				for i := idx; i < idx+length; i++ {
 					pkid, err := pkg.Uint64At(pkg.pkindex, i)
@@ -1987,7 +1987,7 @@ func (t *Table) StreamTx(ctx context.Context, tx *Tx, q Query, fn func(r Row) er
 		q.Close()
 	}()
 
-	jbits = q.Conditions.MatchPack(t.journal.DataPack(), PackInfo{})
+	jbits = q.conds.MatchPack(t.journal.DataPack(), PackInfo{})
 	q.journalTime = time.Since(q.lap)
 
 	if err := q.QueryIndexes(ctx, tx); err != nil {
@@ -1998,7 +1998,7 @@ func (t *Table) StreamTx(ctx context.Context, tx *Tx, q Query, fn func(r Row) er
 		return nil
 	}
 
-	res := Result{fields: q.reqfields}
+	res := Result{fields: q.reqcols}
 
 	if !q.IsEmptyMatch() {
 		q.lap = time.Now()
@@ -2008,13 +2008,13 @@ func (t *Table) StreamTx(ctx context.Context, tx *Tx, q Query, fn func(r Row) er
 				return ctx.Err()
 			}
 
-			pkg, err := t.loadSharedPack(tx, t.packs.packs[p].Key, !q.NoCache, q.reqfields)
+			pkg, err := t.loadSharedPack(tx, t.packs.packs[p].Key, !q.NoCache, q.reqcols)
 			if err != nil {
 				return err
 			}
 			q.packsScanned++
 
-			bits := q.Conditions.MatchPack(pkg, t.packs.packs[p])
+			bits := q.conds.MatchPack(pkg, t.packs.packs[p])
 			for idx, length := bits.Run(0); idx >= 0; idx, length = bits.Run(idx + length) {
 				for i := idx; i < idx+length; i++ {
 					pkid, err := pkg.Uint64At(pkg.pkindex, i)
@@ -2105,7 +2105,7 @@ func (t *Table) StreamTxDesc(ctx context.Context, tx *Tx, q Query, fn func(r Row
 		q.Close()
 	}()
 
-	jbits = q.Conditions.MatchPack(t.journal.DataPack(), PackInfo{})
+	jbits = q.conds.MatchPack(t.journal.DataPack(), PackInfo{})
 	q.journalTime = time.Since(q.lap)
 
 	if err := q.QueryIndexes(ctx, tx); err != nil {
@@ -2117,7 +2117,7 @@ func (t *Table) StreamTxDesc(ctx context.Context, tx *Tx, q Query, fn func(r Row
 	}
 
 	_, maxPackedPk := t.packs.GlobalMinMax()
-	res := Result{fields: q.reqfields}
+	res := Result{fields: q.reqcols}
 	res.pkg = t.journal.DataPack()
 
 	idxs, pks := t.journal.SortedIndexesReversed(jbits)
@@ -2155,13 +2155,13 @@ packloop:
 			return ctx.Err()
 		}
 
-		pkg, err := t.loadSharedPack(tx, t.packs.packs[p].Key, !q.NoCache, q.reqfields)
+		pkg, err := t.loadSharedPack(tx, t.packs.packs[p].Key, !q.NoCache, q.reqcols)
 		if err != nil {
 			return err
 		}
 		q.packsScanned++
 
-		bits := q.Conditions.MatchPack(pkg, t.packs.packs[p]).Reverse()
+		bits := q.conds.MatchPack(pkg, t.packs.packs[p]).Reverse()
 		for idx, length := bits.Run(bits.Size() - 1); idx >= 0; idx, length = bits.Run(idx - length) {
 			for i := idx; i > idx-length; i-- {
 				pkid, err := pkg.Uint64At(pkg.pkindex, i)
@@ -2230,7 +2230,7 @@ func (t *Table) StreamLookup(ctx context.Context, ids []uint64, fn func(r Row) e
 
 func (t *Table) StreamLookupTx(ctx context.Context, tx *Tx, ids []uint64, fn func(r Row) error) error {
 	atomic.AddInt64(&t.stats.StreamCalls, 1)
-	q := NewQuery(t.name+".stream-lookup", t)
+	q := NewQuery(t.name + ".stream-lookup")
 
 	ids, _ = vec.Uint64RemoveZeros(ids)
 	ids = vec.UniqueUint64Slice(ids)
@@ -2305,7 +2305,7 @@ func (t *Table) StreamLookupTx(ctx context.Context, tx *Tx, ids []uint64, fn fun
 			return ctx.Err()
 		}
 
-		pkg, err := t.loadSharedPack(tx, t.packs.packs[nextpack].Key, true, q.reqfields)
+		pkg, err := t.loadSharedPack(tx, t.packs.packs[nextpack].Key, true, q.reqcols)
 		if err != nil {
 			return err
 		}

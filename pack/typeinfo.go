@@ -15,12 +15,9 @@ import (
 	"blockwatch.cc/packdb/filter/bloom"
 )
 
-const (
-	tagName  = "pack"
-	tagAlias = "json"
-)
-
 var (
+	tagName       = "pack"
+	tagAlias      = "json"
 	szPackInfo    = int(reflect.TypeOf(PackInfo{}).Size())
 	szBlockInfo   = int(reflect.TypeOf(block.BlockHeader{}).Size())
 	szBloomFilter = int(reflect.TypeOf(bloom.Filter{}).Size())
@@ -29,6 +26,14 @@ var (
 	szField       = int(reflect.TypeOf(Field{}).Size())
 	szBlock       = int(reflect.TypeOf(block.Block{}).Size())
 )
+
+func UseTag(t string) {
+	tagName = t
+}
+
+func UseTagAlias(t string) {
+	tagAlias = t
+}
 
 type typeInfo struct {
 	name   string
@@ -86,6 +91,22 @@ var (
 	stringerType          = reflect.TypeOf((*fmt.Stringer)(nil)).Elem()
 	byteSliceType         = reflect.TypeOf([]byte(nil))
 )
+
+func canMarshalBinary(v reflect.Value) bool {
+	return v.CanInterface() &&
+		v.Type().Implements(binaryMarshalerType) &&
+		reflect.PointerTo(v.Type()).Implements(binaryUnmarshalerType)
+}
+
+func canMarshalText(v reflect.Value) bool {
+	return v.CanInterface() &&
+		v.Type().Implements(textMarshalerType) &&
+		reflect.PointerTo(v.Type()).Implements(textUnmarshalerType)
+}
+
+func canMarshalString(v reflect.Value) bool {
+	return v.CanInterface() && v.Type().Implements(stringerType)
+}
 
 func getTypeInfo(v interface{}) (*typeInfo, error) {
 	val := reflect.Indirect(reflect.ValueOf(v))
