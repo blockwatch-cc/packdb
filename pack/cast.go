@@ -4,6 +4,7 @@
 package pack
 
 import (
+	"encoding"
 	"fmt"
 	"reflect"
 	"time"
@@ -14,9 +15,27 @@ func (t FieldType) CastType(val interface{}, f Field) (interface{}, error) {
 	res := val
 	switch t {
 	case FieldTypeBytes:
-		_, ok = val.([]byte)
+		if vv, ok := val.(encoding.BinaryMarshaler); ok {
+			r, err := vv.MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+			res = r
+			ok = true
+		} else {
+			_, ok = val.([]byte)
+		}
 	case FieldTypeString:
-		_, ok = val.(string)
+		if vv, ok := val.(encoding.TextMarshaler); ok {
+			r, err := vv.MarshalText()
+			if err != nil {
+				return nil, err
+			}
+			res = r
+			ok = true
+		} else {
+			_, ok = val.(string)
+		}
 	case FieldTypeDatetime:
 		_, ok = val.(time.Time)
 	case FieldTypeBoolean:
