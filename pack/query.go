@@ -23,7 +23,7 @@ type Query struct {
 	Name       string           // optional, used for query stats
 	NoCache    bool             // explicitly disable pack caching for this query
 	NoIndex    bool             // explicitly disable index query (use for many known duplicates)
-	Columns    []string         // SELECT ...
+	Fields     []string         // SELECT ...
 	Conditions UnboundCondition // WHERE ... AND / OR tree
 	Order      OrderType        // ASC|DESC
 	Limit      int              // LIMIT ...
@@ -59,6 +59,10 @@ func NewQuery(name string) Query {
 	}
 }
 
+func (t *Table) NewQuery(name string) Query {
+	return NewQuery(name).WithTable(t)
+}
+
 func (q *Query) Close() {
 	if q.table != nil {
 		q.totalTime = time.Since(q.start)
@@ -69,16 +73,21 @@ func (q *Query) Close() {
 		}
 		q.table = nil
 	}
+	q.Fields = nil
 	q.outcols = nil
 	q.reqcols = nil
 	q.idxcols = nil
 }
 
-func (q *Query) Runtime() time.Duration {
+func (q Query) IsBound() bool {
+	return q.table != nil && !q.conds.Empty()
+}
+
+func (q Query) Runtime() time.Duration {
 	return time.Since(q.start)
 }
 
-func (q *Query) PrintTiming() string {
+func (q Query) PrintTiming() string {
 	return fmt.Sprintf("query: %s compile=%s journal=%s index=%s scan=%s total=%s matched=%d rows, scheduled=%d packs, scanned=%d packs, searched=%d index rows",
 		q.Name,
 		q.compileTime,
@@ -109,10 +118,10 @@ func (q *Query) Compile(t *Table) error {
 		}
 	}
 	if len(q.outcols) == 0 {
-		if len(q.Columns) == 0 {
+		if len(q.Fields) == 0 {
 			q.outcols = t.fields
 		} else {
-			q.outcols = q.table.fields.Select(q.Columns...)
+			q.outcols = q.table.fields.Select(q.Fields...)
 			q.outcols.MergeUnique(t.fields.Pk())
 		}
 	}
@@ -286,8 +295,8 @@ func (q Query) WithTable(table *Table) Query {
 	return q
 }
 
-func (q Query) WithColumns(names ...string) Query {
-	q.Columns = append(q.Columns, names...)
+func (q Query) WithFields(names ...string) Query {
+	q.Fields = append(q.Fields, names...)
 	return q
 }
 

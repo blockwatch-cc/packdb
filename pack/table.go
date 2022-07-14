@@ -900,7 +900,7 @@ func (t *Table) Delete(ctx context.Context, q Query) (int64, error) {
 	}
 	defer tx.Rollback()
 
-	q.Columns = []string{t.Fields().Pk().Name}
+	q.Fields = []string{t.Fields().Pk().Name}
 	res, err := t.QueryTx(ctx, tx, q)
 	if err != nil {
 		return 0, err
@@ -2231,7 +2231,9 @@ func (t *Table) StreamLookup(ctx context.Context, ids []uint64, fn func(r Row) e
 func (t *Table) StreamLookupTx(ctx context.Context, tx *Tx, ids []uint64, fn func(r Row) error) error {
 	atomic.AddInt64(&t.stats.StreamCalls, 1)
 	q := NewQuery(t.name + ".stream-lookup")
-
+	if err := q.Compile(t); err != nil {
+		return err
+	}
 	ids, _ = vec.Uint64RemoveZeros(ids)
 	ids = vec.UniqueUint64Slice(ids)
 
