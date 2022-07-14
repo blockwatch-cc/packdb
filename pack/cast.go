@@ -15,7 +15,7 @@ func (t FieldType) CastType(val interface{}, f Field) (interface{}, error) {
 	res := val
 	switch t {
 	case FieldTypeBytes:
-		if vv, ok := val.(encoding.BinaryMarshaler); ok {
+		if vv, ok2 := val.(encoding.BinaryMarshaler); ok2 {
 			r, err := vv.MarshalBinary()
 			if err != nil {
 				return nil, err
@@ -26,7 +26,7 @@ func (t FieldType) CastType(val interface{}, f Field) (interface{}, error) {
 			_, ok = val.([]byte)
 		}
 	case FieldTypeString:
-		if vv, ok := val.(encoding.TextMarshaler); ok {
+		if vv, ok2 := val.(encoding.TextMarshaler); ok2 {
 			r, err := vv.MarshalText()
 			if err != nil {
 				return nil, err
@@ -99,13 +99,46 @@ func (t FieldType) CastType(val interface{}, f Field) (interface{}, error) {
 }
 
 func (t FieldType) CastSliceType(val interface{}, f Field) (interface{}, error) {
-	var ok bool
+	var (
+		ok  bool
+		err error
+	)
 	res := val
 	switch t {
 	case FieldTypeBytes:
 		_, ok = val.([][]byte)
+		_, ok = val.([][]byte)
+		if !ok {
+			vv, ok2 := val.([]encoding.BinaryMarshaler)
+			if ok2 {
+				slice := make([][]byte, len(vv))
+				for i := range vv {
+					slice[i], err = vv[i].(encoding.BinaryMarshaler).MarshalBinary()
+					if err != nil {
+						return nil, err
+					}
+				}
+				res = slice
+				ok = true
+			}
+		}
 	case FieldTypeString:
 		_, ok = val.([]string)
+		if !ok {
+			vv, ok2 := val.([]encoding.TextMarshaler)
+			if ok2 {
+				slice := make([]string, len(vv))
+				for i := range vv {
+					buf, err := vv[i].(encoding.TextMarshaler).MarshalText()
+					slice[i] = string(buf)
+					if err != nil {
+						return nil, err
+					}
+				}
+				res = slice
+				ok = true
+			}
+		}
 	case FieldTypeDatetime:
 		_, ok = val.([]time.Time)
 	case FieldTypeBoolean:
