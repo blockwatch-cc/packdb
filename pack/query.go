@@ -122,11 +122,12 @@ func (q *Query) Compile(t *Table) error {
 			q.outcols = t.fields
 		} else {
 			q.outcols = q.table.fields.Select(q.Fields...)
-			q.outcols.MergeUnique(t.fields.Pk())
+			q.outcols = q.outcols.MergeUnique(t.fields.Pk())
 		}
 	}
 	if len(q.reqcols) == 0 {
 		q.reqcols = q.outcols.MergeUnique(q.conds.Fields()...)
+		q.reqcols = q.reqcols.MergeUnique(t.fields.Pk())
 	}
 	if len(q.idxcols) == 0 {
 		q.idxcols = t.fields.Indexed()

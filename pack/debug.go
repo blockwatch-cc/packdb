@@ -659,8 +659,10 @@ func (n ConditionTreeNode) dump(level int, w io.Writer) {
 
 func (q Query) Dump() string {
 	buf := bytes.NewBuffer(nil)
-	fmt.Fprintln(buf, "Query:", q.Name, "=>")
+	fmt.Fprintln(buf, "Q>", q.Name, "=>", "SELECT(", strings.Join(q.outcols.Aliases(), ", "), ") WHERE")
 	q.conds.dump(0, buf)
+	fmt.Fprintln(buf, ">> fields:", strings.Join(q.reqcols.Aliases(), ", "))
+	fmt.Fprintln(buf, ">> indexes:", strings.Join(q.idxcols.Aliases(), ", "))
 	return string(buf.Bytes())
 }
 
