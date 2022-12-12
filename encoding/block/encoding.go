@@ -9,7 +9,7 @@ import (
 	"io"
 
 	"blockwatch.cc/packdb/encoding/compress"
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/snappy"
 	"github.com/pierrec/lz4"
 )
 

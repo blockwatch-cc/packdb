@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/snappy"
 )
 
 type SnappyWriter struct {
