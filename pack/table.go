@@ -100,11 +100,11 @@ func (o Options) Merge(o2 Options) Options {
 }
 
 func (o Options) Check() error {
-	if o.PackSizeLog2 < 10 || o.PackSizeLog2 > 22 {
-		return fmt.Errorf("PackSizeLog2 %d out of range [10, 22]", o.PackSizeLog2)
+	if o.PackSizeLog2 < 8 || o.PackSizeLog2 > 22 {
+		return fmt.Errorf("PackSizeLog2 %d out of range [8, 22]", o.PackSizeLog2)
 	}
-	if o.JournalSizeLog2 < 10 || o.JournalSizeLog2 > 22 {
-		return fmt.Errorf("JournalSizeLog2 %d out of range [10, 22]", o.JournalSizeLog2)
+	if o.JournalSizeLog2 < 8 || o.JournalSizeLog2 > 22 {
+		return fmt.Errorf("JournalSizeLog2 %d out of range [8, 22]", o.JournalSizeLog2)
 	}
 	if o.CacheSize < 0 || o.CacheSize > 64*1024 {
 		return fmt.Errorf("CacheSize %d out of range [0, 64k]", o.CacheSize)
