@@ -1138,14 +1138,24 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 	dbits := t.journal.deleted
 
 	var (
-		pkg                            *Package
-		pkgsz                          int = t.opts.PackSize()
-		jpos, tpos, nextpack, lastpack int
-		jlen, tlen                     int = len(live), len(dead)
-		needSort                       bool
-		nextmax, packmax               uint64
-		err                            error
+		pkg                               *Package
+		pkgsz                             int = t.opts.PackSize()
+		jpos, tpos, nextpack, lastpack, n int
+		jlen, tlen                        int = len(live), len(dead)
+		needSort                          bool
+		nextmax, packmax                  uint64
+		err                               error
 	)
+
+	// on error roll back table metadata to last valid value on storage
+	defer func() {
+		if e := recover(); e != nil || err != nil {
+			log.Debugf("pack: %s table restore metadata on error", t.name)
+			if err := t.loadPackInfo(tx.tx); err != nil {
+				log.Errorf("pack: %s table metadata rollback on error failed: %v", t.name, err)
+			}
+		}
+	}()
 
 	_, globalmax := t.packs.GlobalMinMax()
 
@@ -1182,17 +1192,17 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 				if needSort {
 					pkg.PkSort()
 				}
-				n, err := t.storePack(tx, pkg)
+				n, err = t.storePack(tx, pkg)
 				if err != nil {
 					return err
 				}
 				nParts++
 				nBytes += n
 				if tx.Pending() >= txMaxSize {
-					if err := t.storePackInfo(tx.tx); err != nil {
+					if err = t.storePackInfo(tx.tx); err != nil {
 						return err
 					}
-					if err := tx.CommitAndContinue(); err != nil {
+					if err = tx.CommitAndContinue(); err != nil {
 						return err
 					}
 				}
@@ -1250,7 +1260,7 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 				}
 
 				for _, idx := range t.indexes {
-					if err := idx.RemoveTx(tx, pkg, ppos, n); err != nil {
+					if err = idx.RemoveTx(tx, pkg, ppos, n); err != nil {
 						return err
 					}
 				}
@@ -1284,16 +1294,16 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 						pkg, idx.Field.Index, offs,
 						jpack, idx.Field.Index, key.idx,
 					) {
-						if err := idx.RemoveTx(tx, pkg, offs, 1); err != nil {
+						if err = idx.RemoveTx(tx, pkg, offs, 1); err != nil {
 							return err
 						}
-						if err := idx.AddTx(tx, jpack, key.idx, 1); err != nil {
+						if err = idx.AddTx(tx, jpack, key.idx, 1); err != nil {
 							return err
 						}
 					}
 				}
 
-				if err := pkg.CopyFrom(jpack, offs, key.idx, 1); err != nil {
+				if err = pkg.CopyFrom(jpack, offs, key.idx, 1); err != nil {
 					return err
 				}
 				nUpd++
@@ -1308,17 +1318,17 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 							pkg.PkSort()
 							needSort = false
 						}
-						n, err := t.splitPack(tx, pkg)
+						n, err = t.splitPack(tx, pkg)
 						if err != nil {
 							return err
 						}
 						nParts++
 						nBytes += n
 						if tx.Pending() >= txMaxSize {
-							if err := t.storePackInfo(tx.tx); err != nil {
+							if err = t.storePackInfo(tx.tx); err != nil {
 								return err
 							}
-							if err := tx.CommitAndContinue(); err != nil {
+							if err = tx.CommitAndContinue(); err != nil {
 								return err
 							}
 						}
@@ -1329,24 +1339,24 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 							pkg.PkSort()
 							needSort = false
 						}
-						n, err := t.storePack(tx, pkg)
+						n, err = t.storePack(tx, pkg)
 						if err != nil {
 							return err
 						}
 						nParts++
 						nBytes += n
 						if tx.Pending() >= txMaxSize {
-							if err := t.storePackInfo(tx.tx); err != nil {
+							if err = t.storePackInfo(tx.tx); err != nil {
 								return err
 							}
-							if err := tx.CommitAndContinue(); err != nil {
+							if err = tx.CommitAndContinue(); err != nil {
 								return err
 							}
 						}
 						break
 					}
 				}
-				if err := pkg.AppendFrom(jpack, key.idx, 1, true); err != nil {
+				if err = pkg.AppendFrom(jpack, key.idx, 1, true); err != nil {
 					return err
 				}
 				needSort = needSort || key.pk < packmax
@@ -1356,7 +1366,7 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 				nAdd++
 				pAdd++
 				for _, idx := range t.indexes {
-					if err := idx.AddTx(tx, pkg, lastoffset, 1); err != nil {
+					if err = idx.AddTx(tx, pkg, lastoffset, 1); err != nil {
 						return err
 					}
 				}
@@ -1368,7 +1378,7 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 		if needSort {
 			pkg.PkSort()
 		}
-		n, err := t.storePack(tx, pkg)
+		n, err = t.storePack(tx, pkg)
 		if err != nil {
 			return err
 		}
@@ -1381,7 +1391,7 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 		t.name, nParts, nAdd, nDel, util.ByteSize(nBytes), t.stats.LastFlushDuration)
 
 	for _, idx := range t.indexes {
-		if err := idx.FlushTx(ctx, tx); err != nil {
+		if err = idx.FlushTx(ctx, tx); err != nil {
 			return err
 		}
 	}
@@ -1393,7 +1403,8 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 	}
 
 	if t.meta.dirty {
-		buf, err := json.Marshal(t.meta)
+		var buf []byte
+		buf, err = json.Marshal(t.meta)
 		if err != nil {
 			return err
 		}
@@ -1404,7 +1415,7 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 		t.meta.dirty = false
 	}
 
-	if err := t.storePackInfo(tx.tx); err != nil {
+	if err = t.storePackInfo(tx.tx); err != nil {
 		return err
 	}
 
