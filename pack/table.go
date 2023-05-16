@@ -1145,12 +1145,16 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 		needSort                          bool
 		nextmax, packmax                  uint64
 		err                               error
+		loop, maxloop                     int // circuit breaker
 	)
 
 	// on error roll back table metadata to last valid value on storage
 	defer func() {
 		if e := recover(); e != nil || err != nil {
-			log.Debugf("pack: %s table restore metadata on error", t.name)
+			if e != nil {
+				err = e.(error)
+			}
+			log.Debugf("pack: %s table restore metadata on error: %v", t.name, err)
 			if err := t.loadPackInfo(tx.tx); err != nil {
 				log.Errorf("pack: %s table metadata rollback on error failed: %v", t.name, err)
 			}
@@ -1158,6 +1162,7 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 	}()
 
 	_, globalmax := t.packs.GlobalMinMax()
+	maxloop = 2*t.packs.Len() + 2*(tlen+jlen)/t.opts.PackSize() + 2
 
 	for {
 		if jpos >= jlen && tpos >= tlen {
@@ -1185,6 +1190,10 @@ func (t *Table) flushTx(ctx context.Context, tx *Tx) error {
 
 		if lastpack < t.packs.Len() {
 			nextpack, _, nextmax = t.findBestPack(nextid)
+		}
+		loop++
+		if loop > 2*maxloop {
+			nextpack = t.packs.Len()
 		}
 
 		if lastpack != nextpack && pkg != nil {
