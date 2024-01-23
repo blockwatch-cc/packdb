@@ -1963,8 +1963,8 @@ func (t *Table) CountTx(ctx context.Context, tx *Tx, q Query) (int64, error) {
 		}
 		q.scanTime = time.Since(q.lap)
 	}
-
-	q.rowsMatched += util.NonZero(q.Limit, util.Max(int(jbits.Count())-q.Offset, 0))
+	ids, _ := t.journal.SortedIndexes(jbits)
+	q.rowsMatched += util.NonZero(q.Limit, util.Max(len(ids)-q.Offset, 0))
 
 	return int64(q.rowsMatched), nil
 }
