@@ -10,7 +10,7 @@ require (
 	github.com/klauspost/compress v1.17.4
 	github.com/pierrec/lz4 v2.6.1+incompatible
 	go.etcd.io/bbolt v1.3.8
-	golang.org/x/sys v0.15.0
+	golang.org/x/sys v0.16.0
 )
 
 require (
